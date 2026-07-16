@@ -183,7 +183,11 @@ elif role == "ASISTENTE" and page == "Operación":
                 c1, c2 = st.columns(2)
                 start = c1.time_input("Inicio", datetime.now().time().replace(second=0, microsecond=0))
                 close_now = c2.checkbox("Cerrar ahora")
-                end = st.time_input("Fin", datetime.now().time().replace(second=0, microsecond=0), disabled=not close_now)
+                end = st.time_input(
+                    "Fin",
+                    datetime.now().time().replace(second=0, microsecond=0),
+                    help="Esta hora solo se guardará si marcas 'Cerrar ahora'.",
+                )
                 description = st.text_area("Descripción")
                 if st.form_submit_button("Guardar"):
                     start_dt = datetime.combine(date.today(), start).astimezone()
@@ -199,7 +203,40 @@ elif role == "ASISTENTE" and page == "Operación":
                         "registrado_por": user_id, "creado_en": now(),
                     })
                     st.rerun()
-            st.dataframe(frame(T["inc"], {"turno_id": turn_id}), width="stretch", hide_index=True)
+            incidents = frame(T["inc"], {"turno_id": turn_id})
+            if incidents.empty:
+                st.info("Sin incidencias registradas.")
+            else:
+                st.dataframe(incidents, width="stretch", hide_index=True)
+                open_incidents = incidents[incidents["estado"] == "ABIERTA"]
+                if not open_incidents.empty:
+                    st.subheader("Cerrar incidencia abierta")
+                    incident_options = {
+                        f"{row['tipo']} | Inicio: {pd.to_datetime(row['hora_inicio']).strftime('%H:%M')}": str(row["id"])
+                        for _, row in open_incidents.iterrows()
+                    }
+                    selected_incident = st.selectbox("Incidencia", list(incident_options))
+                    closing_time = st.time_input(
+                        "Hora final de la incidencia",
+                        datetime.now().time().replace(second=0, microsecond=0),
+                        key="incident_closing_time",
+                    )
+                    if st.button("Cerrar incidencia", type="primary", use_container_width=True):
+                        incident_id = incident_options[selected_incident]
+                        incident_row = open_incidents[open_incidents["id"].astype(str) == incident_id].iloc[0]
+                        start_dt = pd.to_datetime(incident_row["hora_inicio"]).to_pydatetime()
+                        end_dt = datetime.combine(start_dt.date(), closing_time).astimezone()
+                        if end_dt <= start_dt:
+                            end_dt += timedelta(days=1)
+                        duration = minutes_between(start_dt, end_dt)
+                        edit(T["inc"], {
+                            "hora_fin": end_dt.isoformat(timespec="seconds"),
+                            "duracion_minutos": duration,
+                            "estado": "CERRADA",
+                        }, {"id": incident_id})
+                        audit("incidencias", incident_id, "estado", "ABIERTA", "CERRADA",
+                              f"Duración: {duration} minutos", user_id)
+                        st.rerun()
         with transfer_tab:
             with st.form("move"):
                 c1, c2 = st.columns(2)
