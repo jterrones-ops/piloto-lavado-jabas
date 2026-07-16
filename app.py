@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+
 import pandas as pd
 import streamlit as st
 from supabase import create_client
@@ -11,7 +12,10 @@ T = {
     "prod": "produccion_turno", "audit": "auditoria",
 }
 LABORES = ["Lavado de jabas", "Secado de jabas", "Limpieza de lámina burbupack"]
-INCIDENCIAS = ["Falta de agua", "Falla de equipo", "Falta de energía", "Falta de jabas", "Falta de personal", "Limpieza del área", "Desperfecto mecánico", "Acumulación de jabas", "Otro"]
+INCIDENCIAS = ["Falta de agua", "Falla de equipo", "Falta de energía", "Falta de jabas",
+               "Falta de personal", "Limpieza del área", "Desperfecto mecánico",
+               "Acumulación de jabas", "Otro"]
+
 
 @st.cache_resource
 def db():
@@ -21,58 +25,82 @@ def db():
         raise RuntimeError("Faltan los Secrets de Supabase.")
     return create_client(url, key)
 
+
 try:
     sb = db()
 except Exception as e:
     st.error(f"No se pudo conectar con Supabase: {e}")
     st.stop()
 
-def now(): return datetime.now().isoformat(timespec="seconds")
-def get(table, filters=None, order="id"):
+
+def now():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def timestamp(day, clock):
+    return datetime.combine(day, clock).astimezone().isoformat(timespec="seconds")
+
+
+def get(table, filters=None, order="creado_en"):
     try:
-        q = sb.table(table).select("*")
-        for k, v in (filters or {}).items(): q = q.eq(k, v)
-        if order: q = q.order(order, desc=True)
-        return q.execute().data or []
+        query = sb.table(table).select("*")
+        for key, value in (filters or {}).items():
+            query = query.eq(key, value)
+        if order:
+            query = query.order(order, desc=True)
+        return query.execute().data or []
     except Exception as e:
         message = getattr(e, "message", None) or str(e)
         st.error(f"Error de Supabase al consultar '{table}': {message}")
         return []
-def frame(table, filters=None, order="id"): return pd.DataFrame(get(table, filters, order))
-def add(table, data): return (sb.table(table).insert(data).execute().data or [None])[0]
-def edit(table, data, filters):
-    q = sb.table(table).update(data)
-    for k, v in filters.items(): q = q.eq(k, v)
-    return q.execute().data or []
-def audit(tid, user, action, detail):
-    add(T["audit"], {"turno_id": tid, "usuario": user, "accion": action, "detalle": detail, "fecha_hora": now()})
-def mins(a, b):
-    s, e = datetime.strptime(str(a)[:5], "%H:%M"), datetime.strptime(str(b)[:5], "%H:%M")
-    if e <= s: e += timedelta(days=1)
-    return int((e-s).total_seconds()/60)
-def hours(a, b):
-    m = mins(a, b)
-    return max(m - (45 if m > 360 else 0), 0) / 60
 
-def label(r): return f"#{int(r.id)} | {r.fecha} | {r.turno} | {r.asistente} | {r.estado}"
-def choose_turn(statuses, user=None):
-    d = frame(T["turnos"])
-    if not d.empty: d = d[d.estado.isin(statuses)]
-    if user and not d.empty: d = d[d.asistente == user]
-    if d.empty: return None
-    mp = {label(r): int(r.id) for _, r in d.iterrows()}
-    return mp[st.selectbox("Turno", list(mp))]
+
+def frame(table, filters=None, order="creado_en"):
+    return pd.DataFrame(get(table, filters, order))
+
+
+def add(table, data):
+    rows = sb.table(table).insert(data).execute().data or []
+    return rows[0] if rows else None
+
+
+def edit(table, data, filters):
+    query = sb.table(table).update(data)
+    for key, value in filters.items():
+        query = query.eq(key, value)
+    return query.execute().data or []
+
+
+def audit(table, record_id, field, old, new, reason, user_id):
+    add(T["audit"], {
+        "tabla": table, "registro_id": record_id, "campo": field,
+        "valor_anterior": "" if old is None else str(old),
+        "valor_nuevo": "" if new is None else str(new),
+        "motivo": reason, "usuario_id": user_id, "creado_en": now(),
+    })
+
+
+def minutes_between(start, end):
+    return max(int((end - start).total_seconds() / 60), 0)
+
+
+users = frame(T["users"], order="nombre")
+if not users.empty and "activo" in users:
+    users = users[users["activo"].fillna(False).astype(bool)]
+user_by_id = {str(row["id"]): row["nombre"] for _, row in users.iterrows()} if not users.empty else {}
 
 st.sidebar.title("🧼 Lavado de jabas")
 role = st.sidebar.selectbox("Ver como", ["ASISTENTE", "SUPERVISOR", "JEFATURA"])
-users = frame(T["users"], order="nombre")
-if role == "ASISTENTE":
-    if not users.empty and "rol" in users: users = users[users.rol.astype(str).str.upper() == "ASISTENTE"]
-    if not users.empty and "activo" in users: users = users[users.activo.astype(bool)]
-    names = users.nombre.tolist() if not users.empty and "nombre" in users else []
-    user = st.sidebar.selectbox("Asistente", names) if names else st.sidebar.text_input("Asistente", "Asistente piloto")
-elif role == "SUPERVISOR": user = "Rafael Zapata"
-else: user = "Jefatura de Logística"
+role_users = users[users["rol"].astype(str).str.upper() == role] if not users.empty else pd.DataFrame()
+if not role_users.empty:
+    options = role_users["nombre"].tolist()
+    user_name = st.sidebar.selectbox("Usuario", options)
+    user_row = role_users[role_users["nombre"] == user_name].iloc[0]
+    user_id = str(user_row["id"])
+else:
+    st.sidebar.error(f"No hay un usuario activo con rol {role}.")
+    st.stop()
+
 menus = {
     "ASISTENTE": ["Inicio", "Abrir turno", "Operación", "Cerrar turno"],
     "SUPERVISOR": ["Panel", "Confirmar apertura", "Seguimiento", "Validar cierre"],
@@ -81,97 +109,229 @@ menus = {
 page = st.sidebar.radio("Menú", menus[role])
 st.sidebar.caption("Base central: Supabase")
 
+
+def turn_label(row):
+    assistant = user_by_id.get(str(row["asistente_id"]), "Sin asignar")
+    return f"{row['fecha']} | {row['tipo_turno']} | {assistant} | {row['estado']}"
+
+
+def choose_turn(statuses, assistant_id=None):
+    data = frame(T["turnos"])
+    if not data.empty:
+        data = data[data["estado"].isin(statuses)]
+    if assistant_id and not data.empty:
+        data = data[data["asistente_id"].astype(str) == str(assistant_id)]
+    if data.empty:
+        return None
+    mapping = {turn_label(row): str(row["id"]) for _, row in data.iterrows()}
+    return mapping[st.selectbox("Turno", list(mapping))]
+
+
 if role == "ASISTENTE" and page == "Inicio":
     st.title("Piloto Lavado de Jabas")
-    d = frame(T["turnos"], {"asistente": user})
-    st.dataframe(d, use_container_width=True, hide_index=True) if not d.empty else st.info("Sin turnos registrados.")
+    data = frame(T["turnos"], {"asistente_id": user_id})
+    if data.empty:
+        st.info("Sin turnos registrados.")
+    else:
+        data["asistente"] = data["asistente_id"].astype(str).map(user_by_id)
+        st.dataframe(data, width="stretch", hide_index=True)
 
 elif role == "ASISTENTE" and page == "Abrir turno":
     st.title("Abrir turno")
     with st.form("open"):
-        c1, c2 = st.columns(2); f = c1.date_input("Fecha", date.today()); shift = c2.selectbox("Turno", ["Día", "Noche"])
+        c1, c2 = st.columns(2)
+        day = c1.date_input("Fecha", date.today())
+        shift = c2.selectbox("Turno", ["Día", "Noche"])
         defaults = {"Día": ("06:00", "18:00"), "Noche": ("18:00", "06:00")}
-        c1, c2 = st.columns(2); hi = c1.time_input("Inicio", time.fromisoformat(defaults[shift][0])); hf = c2.time_input("Fin programado", time.fromisoformat(defaults[shift][1]))
-        qty = [st.number_input(x, 0, 200, v) for x, v in zip(LABORES, [10, 4, 2])]
-        obs = st.text_area("Observación")
+        c1, c2 = st.columns(2)
+        start = c1.time_input("Inicio", time.fromisoformat(defaults[shift][0]))
+        end = c2.time_input("Fin programado", time.fromisoformat(defaults[shift][1]))
+        quantities = [st.number_input(labor, 0, 200, value) for labor, value in zip(LABORES, [10, 4, 2])]
+        observation = st.text_area("Observación")
         if st.form_submit_button("Enviar al supervisor", type="primary", use_container_width=True):
             try:
-                row = add(T["turnos"], {"fecha": str(f), "turno": shift, "asistente": user, "hora_inicio": hi.strftime("%H:%M"), "hora_fin_programada": hf.strftime("%H:%M"), "estado": "Apertura enviada", "observacion_apertura": obs, "creado_en": now()})
-                tid = row["id"]
-                add(T["personal"], [{"turno_id": tid, "labor": lab, "personal_inicial": n, "personal_final": n, "hora_inicio": hi.strftime("%H:%M"), "hora_fin": None} for lab, n in zip(LABORES, qty)])
-                audit(tid, user, "Apertura enviada", f"Personal inicial: {sum(qty)}")
-                st.success(f"Turno #{tid} creado en Supabase.")
-            except Exception as e: st.error(f"No se pudo crear el turno: {e}")
+                row = add(T["turnos"], {
+                    "fecha": str(day), "tipo_turno": shift,
+                    "hora_programada_inicio": start.strftime("%H:%M"),
+                    "hora_programada_fin": end.strftime("%H:%M"),
+                    "asistente_id": user_id, "responsable_operacion": user_name,
+                    "estado": "Apertura enviada", "observacion_apertura": observation,
+                    "creado_en": now(), "actualizado_en": now(),
+                })
+                turn_id = row["id"]
+                add(T["personal"], [{
+                    "turno_id": turn_id, "labor": labor, "cantidad_personas": quantity,
+                    "hora_inicio": timestamp(day, start), "minutos_refrigerio": 45,
+                    "creado_en": now(),
+                } for labor, quantity in zip(LABORES, quantities)])
+                audit("turnos", turn_id, "estado", None, "Apertura enviada",
+                      f"Personal inicial: {sum(quantities)}", user_id)
+                st.success(f"Turno creado en Supabase: {turn_id}")
+            except Exception as e:
+                st.error(f"No se pudo crear el turno: {getattr(e, 'message', None) or str(e)}")
 
 elif role == "ASISTENTE" and page == "Operación":
-    st.title("Operación en curso"); tid = choose_turn(["En ejecución", "Observado"], user)
-    if tid is None: st.info("No tienes turnos en ejecución.")
+    st.title("Operación en curso")
+    turn_id = choose_turn(["En ejecución", "Observado"], user_id)
+    if turn_id is None:
+        st.info("No tienes turnos en ejecución.")
     else:
-        a, b = st.tabs(["Incidencias", "Traslado interno"])
-        with a:
+        incident_tab, transfer_tab = st.tabs(["Incidencias", "Traslado interno"])
+        with incident_tab:
             with st.form("inc"):
-                typ = st.selectbox("Tipo", INCIDENCIAS); c1, c2 = st.columns(2); start = c1.time_input("Inicio", datetime.now().time().replace(second=0, microsecond=0)); close = c2.checkbox("Cerrar ahora")
-                end = st.time_input("Fin", datetime.now().time().replace(second=0, microsecond=0), disabled=not close); desc = st.text_area("Descripción")
+                incident_type = st.selectbox("Tipo", INCIDENCIAS)
+                c1, c2 = st.columns(2)
+                start = c1.time_input("Inicio", datetime.now().time().replace(second=0, microsecond=0))
+                close_now = c2.checkbox("Cerrar ahora")
+                end = st.time_input("Fin", datetime.now().time().replace(second=0, microsecond=0), disabled=not close_now)
+                description = st.text_area("Descripción")
                 if st.form_submit_button("Guardar"):
-                    add(T["inc"], {"turno_id": tid, "tipo": typ, "hora_inicio": start.strftime("%H:%M"), "hora_fin": end.strftime("%H:%M") if close else None, "estado": "Cerrada" if close else "En curso", "afecta_produccion": True, "descripcion": desc, "creado_por": user, "creado_en": now()}); audit(tid, user, "Incidencia registrada", typ); st.rerun()
-            st.dataframe(frame(T["inc"], {"turno_id": tid}), use_container_width=True, hide_index=True)
-        with b:
+                    start_dt = datetime.combine(date.today(), start).astimezone()
+                    end_dt = datetime.combine(date.today(), end).astimezone() if close_now else None
+                    if end_dt and end_dt <= start_dt:
+                        end_dt += timedelta(days=1)
+                    add(T["inc"], {
+                        "turno_id": turn_id, "tipo": incident_type, "descripcion": description,
+                        "hora_inicio": start_dt.isoformat(timespec="seconds"),
+                        "hora_fin": end_dt.isoformat(timespec="seconds") if end_dt else None,
+                        "duracion_minutos": minutes_between(start_dt, end_dt) if end_dt else None,
+                        "estado": "Cerrada" if close_now else "En curso",
+                        "registrado_por": user_id, "creado_en": now(),
+                    })
+                    st.rerun()
+            st.dataframe(frame(T["inc"], {"turno_id": turn_id}), width="stretch", hide_index=True)
+        with transfer_tab:
             with st.form("move"):
-                c1, c2 = st.columns(2); origin = c1.selectbox("Origen", LABORES); dest = c2.selectbox("Destino", LABORES, index=1); amount = st.number_input("Personas", 1, 200, 1); reason = st.text_input("Motivo")
+                c1, c2 = st.columns(2)
+                origin = c1.selectbox("Origen", LABORES)
+                destination = c2.selectbox("Destino", LABORES, index=1)
+                amount = st.number_input("Personas", 1, 200, 1)
+                reason = st.text_input("Motivo")
                 if st.form_submit_button("Registrar"):
-                    if origin == dest: st.error("Origen y destino deben ser distintos.")
-                    else: add(T["tras"], {"turno_id": tid, "hora": datetime.now().strftime("%H:%M"), "labor_origen": origin, "labor_destino": dest, "cantidad": amount, "motivo": reason, "creado_por": user, "creado_en": now()}); audit(tid, user, "Traslado interno", f"{amount}: {origin} → {dest}"); st.rerun()
-            st.dataframe(frame(T["tras"], {"turno_id": tid}), use_container_width=True, hide_index=True)
+                    if origin == destination:
+                        st.error("Origen y destino deben ser distintos.")
+                    else:
+                        add(T["tras"], {
+                            "turno_id": turn_id, "hora_traslado": now(),
+                            "labor_origen": origin, "labor_destino": destination,
+                            "cantidad_personas": amount, "motivo": reason,
+                            "registrado_por": user_id, "creado_en": now(),
+                        })
+                        st.rerun()
+            st.dataframe(frame(T["tras"], {"turno_id": turn_id}), width="stretch", hide_index=True)
 
 elif role == "ASISTENTE" and page == "Cerrar turno":
-    st.title("Cerrar turno"); tid = choose_turn(["En ejecución", "Observado"], user)
-    if tid is None: st.info("No hay turnos disponibles.")
+    st.title("Cerrar turno")
+    turn_id = choose_turn(["En ejecución", "Observado"], user_id)
+    if turn_id is None:
+        st.info("No hay turnos disponibles.")
     else:
-        p = frame(T["personal"], {"turno_id": tid}); t = frame(T["turnos"], {"id": tid}).iloc[0]
+        personal = frame(T["personal"], {"turno_id": turn_id})
+        turn = frame(T["turnos"], {"id": turn_id}).iloc[0]
         with st.form("close"):
-            vals = {int(r.id): st.number_input(r.labor, 0, 200, int(r.personal_final), key=f"p{r.id}") for _, r in p.iterrows()}
-            end = st.time_input("Hora final real", time.fromisoformat(str(t.hora_fin_programada)[:5])); c1, c2, c3, c4 = st.columns(4)
-            rec, lav, sec, lam = c1.number_input("Recibidas", 0.0), c2.number_input("Lavadas", 0.0), c3.number_input("Secadas", 0.0), c4.number_input("Láminas", 0.0)
-            obs = st.text_area("Observación")
+            end = st.time_input("Hora final real", time.fromisoformat(str(turn["hora_programada_fin"])[:5]))
+            washed = st.number_input("Jabas lavadas", 0, 1000000, 0, step=100)
+            observation = st.text_area("Observación de cierre")
             if st.form_submit_button("Enviar cierre", type="primary"):
-                for pid, n in vals.items(): edit(T["personal"], {"personal_final": n, "hora_fin": end.strftime("%H:%M")}, {"id": pid})
-                payload = {"turno_id": tid, "jabas_recibidas": rec, "jabas_lavadas": lav, "jabas_secadas": sec, "laminas_limpiadas": lam, "observacion": obs, "enviado_por": user, "enviado_en": now(), "estado": "Pendiente"}
-                if get(T["prod"], {"turno_id": tid}): edit(T["prod"], payload, {"turno_id": tid})
-                else: add(T["prod"], payload)
-                edit(T["turnos"], {"estado": "Cierre enviado"}, {"id": tid}); audit(tid, user, "Cierre enviado", f"Lavadas: {lav}"); st.success("Cierre enviado.")
+                end_dt = datetime.combine(date.fromisoformat(str(turn["fecha"])), end).astimezone()
+                start_clock = time.fromisoformat(str(turn["hora_programada_inicio"])[:5])
+                start_dt = datetime.combine(date.fromisoformat(str(turn["fecha"])), start_clock).astimezone()
+                if end_dt <= start_dt:
+                    end_dt += timedelta(days=1)
+                total_hours_person = 0.0
+                for _, item in personal.iterrows():
+                    initial = pd.to_datetime(item["hora_inicio"]).to_pydatetime()
+                    worked_minutes = minutes_between(initial, end_dt)
+                    break_minutes = 45 if worked_minutes > 360 else 0
+                    effective_hours = max(worked_minutes - break_minutes, 0) / 60
+                    hours_person = effective_hours * int(item["cantidad_personas"])
+                    total_hours_person += hours_person
+                    edit(T["personal"], {
+                        "hora_fin": end_dt.isoformat(timespec="seconds"),
+                        "minutos_refrigerio": break_minutes,
+                        "horas_efectivas": effective_hours, "horas_persona": hours_person,
+                    }, {"id": str(item["id"])})
+                productivity = washed / total_hours_person if total_hours_person else 0
+                payload = {"turno_id": turn_id, "jabas_lavadas": washed,
+                           "horas_persona": total_hours_person, "productividad": productivity,
+                           "actualizado_en": now()}
+                if get(T["prod"], {"turno_id": turn_id}):
+                    edit(T["prod"], payload, {"turno_id": turn_id})
+                else:
+                    payload["creado_en"] = now()
+                    add(T["prod"], payload)
+                edit(T["turnos"], {"estado": "Cierre enviado", "hora_real_fin": end_dt.isoformat(timespec="seconds"),
+                                    "observacion_cierre": observation, "cerrado_en": now(), "actualizado_en": now()},
+                     {"id": turn_id})
+                audit("turnos", turn_id, "estado", "En ejecución", "Cierre enviado",
+                      f"Jabas lavadas: {washed}", user_id)
+                st.success("Cierre enviado al supervisor.")
 
 elif role == "SUPERVISOR" and page == "Panel":
-    st.title("Panel supervisor"); st.caption("Responsable: Rafael Zapata"); d = frame(T["turnos"])
-    for col, status in zip(st.columns(4), ["Apertura enviada", "En ejecución", "Cierre enviado", "Validado"]): col.metric(status, int((d.estado == status).sum()) if not d.empty else 0)
+    st.title("Panel supervisor")
+    data = frame(T["turnos"])
+    for column, status in zip(st.columns(4), ["Apertura enviada", "En ejecución", "Cierre enviado", "Validado"]):
+        column.metric(status, int((data["estado"] == status).sum()) if not data.empty else 0)
 
 elif role == "SUPERVISOR" and page == "Confirmar apertura":
-    st.title("Confirmar apertura"); tid = choose_turn(["Apertura enviada"])
-    if tid is None: st.info("No hay aperturas pendientes.")
+    st.title("Confirmar apertura")
+    turn_id = choose_turn(["Apertura enviada"])
+    if turn_id is None:
+        st.info("No hay aperturas pendientes.")
     else:
-        st.dataframe(frame(T["personal"], {"turno_id": tid}), use_container_width=True, hide_index=True)
-        if st.button("Confirmar inicio", type="primary"): edit(T["turnos"], {"estado": "En ejecución", "confirmado_por": user, "confirmado_en": now()}, {"id": tid}); audit(tid, user, "Inicio confirmado", "Apertura validada"); st.rerun()
+        st.dataframe(frame(T["personal"], {"turno_id": turn_id}), width="stretch", hide_index=True)
+        if st.button("Confirmar inicio", type="primary"):
+            edit(T["turnos"], {"estado": "En ejecución", "supervisor_id": user_id,
+                                "hora_real_inicio": now(), "confirmado_en": now(), "actualizado_en": now()},
+                 {"id": turn_id})
+            audit("turnos", turn_id, "estado", "Apertura enviada", "En ejecución",
+                  "Apertura validada", user_id)
+            st.rerun()
 
 elif role == "SUPERVISOR" and page == "Seguimiento":
-    st.title("Seguimiento"); tid = choose_turn(["En ejecución", "Cierre enviado", "Validado"])
-    if tid is not None:
-        for name, table in [("Incidencias", "inc"), ("Traslados", "tras"), ("Auditoría", "audit")]: st.subheader(name); st.dataframe(frame(T[table], {"turno_id": tid}), use_container_width=True, hide_index=True)
+    st.title("Seguimiento")
+    turn_id = choose_turn(["En ejecución", "Cierre enviado", "Validado"])
+    if turn_id is not None:
+        for title, table in [("Incidencias", "inc"), ("Traslados", "tras"), ("Auditoría", "audit")]:
+            st.subheader(title)
+            st.dataframe(frame(T[table], {"turno_id": turn_id}) if table != "audit" else frame(T[table], {"registro_id": turn_id}),
+                         width="stretch", hide_index=True)
 
 elif role == "SUPERVISOR" and page == "Validar cierre":
-    st.title("Validar cierre"); tid = choose_turn(["Cierre enviado"])
-    if tid is None: st.info("No hay cierres pendientes.")
+    st.title("Validar cierre")
+    turn_id = choose_turn(["Cierre enviado"])
+    if turn_id is None:
+        st.info("No hay cierres pendientes.")
     else:
-        prod = frame(T["prod"], {"turno_id": tid}).iloc[0]; old = float(prod.jabas_lavadas)
+        production = frame(T["prod"], {"turno_id": turn_id}).iloc[0]
+        old = int(production["jabas_lavadas"])
         with st.form("validate"):
-            new = st.number_input("Jabas lavadas", 0.0, value=old); reason = st.text_area("Motivo obligatorio si corrige")
+            new = st.number_input("Jabas lavadas", 0, 1000000, old)
+            reason = st.text_area("Motivo obligatorio si corrige")
             if st.form_submit_button("Validar", type="primary"):
-                if new != old and not reason.strip(): st.error("Debe indicar el motivo.")
+                if new != old and not reason.strip():
+                    st.error("Debe indicar el motivo.")
                 else:
-                    if new != old: edit(T["prod"], {"jabas_lavadas": new}, {"turno_id": tid}); audit(tid, user, "Corrección", f"{old} → {new}. {reason}")
-                    edit(T["prod"], {"estado": "Validado", "validado_por": user, "validado_en": now()}, {"turno_id": tid}); edit(T["turnos"], {"estado": "Validado"}, {"id": tid}); audit(tid, user, "Cierre validado", "Validado por supervisor"); st.rerun()
+                    hours_person = float(production["horas_persona"] or 0)
+                    if new != old:
+                        edit(T["prod"], {"jabas_lavadas": new,
+                                         "productividad": new / hours_person if hours_person else 0,
+                                         "actualizado_en": now()}, {"turno_id": turn_id})
+                        audit("produccion_turno", str(production["id"]), "jabas_lavadas", old, new, reason, user_id)
+                    edit(T["turnos"], {"estado": "Validado", "supervisor_id": user_id,
+                                        "validado_en": now(), "actualizado_en": now()}, {"id": turn_id})
+                    audit("turnos", turn_id, "estado", "Cierre enviado", "Validado",
+                          "Cierre validado", user_id)
+                    st.rerun()
 
 elif role == "JEFATURA":
     st.title(page)
     table = {"Panel": "turnos", "Turnos": "turnos", "Incidencias": "inc", "Auditoría": "audit"}[page]
-    d = frame(T[table]); st.dataframe(d, use_container_width=True, hide_index=True) if not d.empty else st.info("Sin datos.")
+    data = frame(T[table])
+    if data.empty:
+        st.info("Sin datos.")
+    else:
+        st.dataframe(data, width="stretch", hide_index=True)
 
-st.divider(); st.caption("Piloto Lavado de Jabas · Supabase · Refrigerio automático: 45 min en jornadas mayores a 6 horas")
+st.divider()
+st.caption("Piloto Lavado de Jabas · Supabase · Refrigerio automático: 45 min en jornadas mayores a 6 horas")
