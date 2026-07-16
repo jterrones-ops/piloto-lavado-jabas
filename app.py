@@ -8,7 +8,12 @@ import pandas as pd
 import streamlit as st
 from supabase import create_client
 
-st.set_page_config(page_title="Piloto Lavado de Jabas", page_icon="🧼", layout="wide")
+st.set_page_config(
+    page_title="Piloto Lavado de Jabas",
+    page_icon="🧼",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 T = {
     "users": "app_users", "turnos": "turnos", "personal": "personal_labor",
@@ -234,7 +239,12 @@ menus = {
 if role not in menus:
     st.error("El rol de este usuario no está configurado correctamente.")
     st.stop()
-page = st.sidebar.radio("Menú", menus[role])
+page = st.selectbox(
+    "Ir a",
+    menus[role],
+    key=f"main_navigation_{role}",
+    help="Selecciona la sección que deseas abrir.",
+)
 st.sidebar.caption("Base central: Supabase")
 
 
