@@ -29,10 +29,15 @@ except Exception as e:
 
 def now(): return datetime.now().isoformat(timespec="seconds")
 def get(table, filters=None, order="id"):
-    q = sb.table(table).select("*")
-    for k, v in (filters or {}).items(): q = q.eq(k, v)
-    if order: q = q.order(order, desc=True)
-    return q.execute().data or []
+    try:
+        q = sb.table(table).select("*")
+        for k, v in (filters or {}).items(): q = q.eq(k, v)
+        if order: q = q.order(order, desc=True)
+        return q.execute().data or []
+    except Exception as e:
+        message = getattr(e, "message", None) or str(e)
+        st.error(f"Error de Supabase al consultar '{table}': {message}")
+        return []
 def frame(table, filters=None, order="id"): return pd.DataFrame(get(table, filters, order))
 def add(table, data): return (sb.table(table).insert(data).execute().data or [None])[0]
 def edit(table, data, filters):
