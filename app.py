@@ -151,11 +151,11 @@ elif role == "ASISTENTE" and page == "Abrir turno":
         if st.form_submit_button("Enviar al supervisor", type="primary", use_container_width=True):
             try:
                 row = add(T["turnos"], {
-                    "fecha": str(day), "tipo_turno": shift,
+                    "fecha": str(day), "tipo_turno": "DIA" if shift == "Día" else "NOCHE",
                     "hora_programada_inicio": start.strftime("%H:%M"),
                     "hora_programada_fin": end.strftime("%H:%M"),
                     "asistente_id": user_id, "responsable_operacion": user_name,
-                    "estado": "Apertura enviada", "observacion_apertura": observation,
+                    "estado": "ABIERTO", "observacion_apertura": observation,
                     "creado_en": now(), "actualizado_en": now(),
                 })
                 turn_id = row["id"]
@@ -164,7 +164,7 @@ elif role == "ASISTENTE" and page == "Abrir turno":
                     "hora_inicio": timestamp(day, start), "minutos_refrigerio": 45,
                     "creado_en": now(),
                 } for labor, quantity in zip(LABORES, quantities)])
-                audit("turnos", turn_id, "estado", None, "Apertura enviada",
+                audit("turnos", turn_id, "estado", None, "ABIERTO",
                       f"Personal inicial: {sum(quantities)}", user_id)
                 st.success(f"Turno creado en Supabase: {turn_id}")
             except Exception as e:
@@ -172,7 +172,7 @@ elif role == "ASISTENTE" and page == "Abrir turno":
 
 elif role == "ASISTENTE" and page == "Operación":
     st.title("Operación en curso")
-    turn_id = choose_turn(["En ejecución", "Observado"], user_id)
+    turn_id = choose_turn(["CONFIRMADO"], user_id)
     if turn_id is None:
         st.info("No tienes turnos en ejecución.")
     else:
@@ -195,7 +195,7 @@ elif role == "ASISTENTE" and page == "Operación":
                         "hora_inicio": start_dt.isoformat(timespec="seconds"),
                         "hora_fin": end_dt.isoformat(timespec="seconds") if end_dt else None,
                         "duracion_minutos": minutes_between(start_dt, end_dt) if end_dt else None,
-                        "estado": "Cerrada" if close_now else "En curso",
+                        "estado": "CERRADA" if close_now else "ABIERTA",
                         "registrado_por": user_id, "creado_en": now(),
                     })
                     st.rerun()
@@ -222,7 +222,7 @@ elif role == "ASISTENTE" and page == "Operación":
 
 elif role == "ASISTENTE" and page == "Cerrar turno":
     st.title("Cerrar turno")
-    turn_id = choose_turn(["En ejecución", "Observado"], user_id)
+    turn_id = choose_turn(["CONFIRMADO"], user_id)
     if turn_id is None:
         st.info("No hay turnos disponibles.")
     else:
@@ -260,37 +260,37 @@ elif role == "ASISTENTE" and page == "Cerrar turno":
                 else:
                     payload["creado_en"] = now()
                     add(T["prod"], payload)
-                edit(T["turnos"], {"estado": "Cierre enviado", "hora_real_fin": end_dt.isoformat(timespec="seconds"),
+                edit(T["turnos"], {"estado": "CERRADO", "hora_real_fin": end_dt.isoformat(timespec="seconds"),
                                     "observacion_cierre": observation, "cerrado_en": now(), "actualizado_en": now()},
                      {"id": turn_id})
-                audit("turnos", turn_id, "estado", "En ejecución", "Cierre enviado",
+                audit("turnos", turn_id, "estado", "CONFIRMADO", "CERRADO",
                       f"Jabas lavadas: {washed}", user_id)
                 st.success("Cierre enviado al supervisor.")
 
 elif role == "SUPERVISOR" and page == "Panel":
     st.title("Panel supervisor")
     data = frame(T["turnos"])
-    for column, status in zip(st.columns(4), ["Apertura enviada", "En ejecución", "Cierre enviado", "Validado"]):
+    for column, status in zip(st.columns(4), ["ABIERTO", "CONFIRMADO", "CERRADO", "VALIDADO"]):
         column.metric(status, int((data["estado"] == status).sum()) if not data.empty else 0)
 
 elif role == "SUPERVISOR" and page == "Confirmar apertura":
     st.title("Confirmar apertura")
-    turn_id = choose_turn(["Apertura enviada"])
+    turn_id = choose_turn(["ABIERTO"])
     if turn_id is None:
         st.info("No hay aperturas pendientes.")
     else:
         st.dataframe(frame(T["personal"], {"turno_id": turn_id}), width="stretch", hide_index=True)
         if st.button("Confirmar inicio", type="primary"):
-            edit(T["turnos"], {"estado": "En ejecución", "supervisor_id": user_id,
+            edit(T["turnos"], {"estado": "CONFIRMADO", "supervisor_id": user_id,
                                 "hora_real_inicio": now(), "confirmado_en": now(), "actualizado_en": now()},
                  {"id": turn_id})
-            audit("turnos", turn_id, "estado", "Apertura enviada", "En ejecución",
+            audit("turnos", turn_id, "estado", "ABIERTO", "CONFIRMADO",
                   "Apertura validada", user_id)
             st.rerun()
 
 elif role == "SUPERVISOR" and page == "Seguimiento":
     st.title("Seguimiento")
-    turn_id = choose_turn(["En ejecución", "Cierre enviado", "Validado"])
+    turn_id = choose_turn(["CONFIRMADO", "CERRADO", "VALIDADO"])
     if turn_id is not None:
         for title, table in [("Incidencias", "inc"), ("Traslados", "tras"), ("Auditoría", "audit")]:
             st.subheader(title)
@@ -299,7 +299,7 @@ elif role == "SUPERVISOR" and page == "Seguimiento":
 
 elif role == "SUPERVISOR" and page == "Validar cierre":
     st.title("Validar cierre")
-    turn_id = choose_turn(["Cierre enviado"])
+    turn_id = choose_turn(["CERRADO"])
     if turn_id is None:
         st.info("No hay cierres pendientes.")
     else:
@@ -318,9 +318,9 @@ elif role == "SUPERVISOR" and page == "Validar cierre":
                                          "productividad": new / hours_person if hours_person else 0,
                                          "actualizado_en": now()}, {"turno_id": turn_id})
                         audit("produccion_turno", str(production["id"]), "jabas_lavadas", old, new, reason, user_id)
-                    edit(T["turnos"], {"estado": "Validado", "supervisor_id": user_id,
+                    edit(T["turnos"], {"estado": "VALIDADO", "supervisor_id": user_id,
                                         "validado_en": now(), "actualizado_en": now()}, {"id": turn_id})
-                    audit("turnos", turn_id, "estado", "Cierre enviado", "Validado",
+                    audit("turnos", turn_id, "estado", "CERRADO", "VALIDADO",
                           "Cierre validado", user_id)
                     st.rerun()
 
