@@ -104,6 +104,10 @@ def password_is_valid(password, stored_hash):
     return False
 
 
+def hash_password(password):
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
 all_users = frame(T["users"], order="nombre")
 users = all_users.copy()
 if not users.empty and "activo" in users:
@@ -423,30 +427,89 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
     display = all_users[["nombre", "usuario", "rol", "activo"]].copy()
     display["operación"] = "Lavado de jabas"
     st.dataframe(display, width="stretch", hide_index=True)
-    if not all_users.empty:
-        user_options = {f"{row['nombre']} · {row['usuario']}": str(row["id"]) for _, row in all_users.iterrows()}
-        selected_label = st.selectbox("Usuario a configurar", list(user_options))
-        selected_id = user_options[selected_label]
-        selected = all_users[all_users["id"].astype(str) == selected_id].iloc[0]
-        roles = ["ASISTENTE", "SUPERVISOR", "JEFATURA"]
-        selected_role = st.selectbox("Rol", roles, index=roles.index(str(selected["rol"]).upper()))
-        selected_active = st.checkbox("Acceso activo", value=bool(selected["activo"]))
-        st.text_input("Operación asignada", "Lavado de jabas", disabled=True)
-        if st.button("Guardar acceso", type="primary", use_container_width=True):
-            if selected_id == user_id and not selected_active:
-                st.error("No puedes desactivar tu propia cuenta mientras estás conectado.")
-            else:
-                old_role = str(selected["rol"]).upper()
-                old_active = bool(selected["activo"])
-                edit(T["users"], {"rol": selected_role, "activo": selected_active}, {"id": selected_id})
-                if old_role != selected_role:
-                    audit("app_users", selected_id, "rol", old_role, selected_role,
-                          "Configuración de acceso por Jefatura", user_id)
-                if old_active != selected_active:
-                    audit("app_users", selected_id, "activo", old_active, selected_active,
-                          "Configuración de acceso por Jefatura", user_id)
-                st.success("Acceso actualizado.")
-                st.rerun()
+    edit_tab, create_tab = st.tabs(["Configurar usuario", "Nuevo usuario"])
+    with edit_tab:
+        if not all_users.empty:
+            user_options = {f"{row['nombre']} · {row['usuario']}": str(row["id"]) for _, row in all_users.iterrows()}
+            selected_label = st.selectbox("Usuario a configurar", list(user_options))
+            selected_id = user_options[selected_label]
+            selected = all_users[all_users["id"].astype(str) == selected_id].iloc[0]
+            roles = ["ASISTENTE", "SUPERVISOR", "JEFATURA"]
+            selected_name = st.text_input("Nombre", str(selected["nombre"]), key="edit_name")
+            selected_username = st.text_input("Usuario", str(selected["usuario"]), key="edit_username")
+            selected_role = st.selectbox("Rol", roles, index=roles.index(str(selected["rol"]).upper()))
+            selected_active = st.checkbox("Acceso activo", value=bool(selected["activo"]))
+            st.text_input("Operación asignada", "Lavado de jabas", disabled=True)
+            if st.button("Guardar cambios", type="primary", use_container_width=True):
+                duplicate = all_users[
+                    (all_users["usuario"].astype(str).str.lower() == selected_username.strip().lower())
+                    & (all_users["id"].astype(str) != selected_id)
+                ]
+                if not selected_name.strip() or not selected_username.strip():
+                    st.error("Nombre y usuario son obligatorios.")
+                elif not duplicate.empty:
+                    st.error("Ese nombre de usuario ya existe.")
+                elif selected_id == user_id and not selected_active:
+                    st.error("No puedes desactivar tu propia cuenta mientras estás conectado.")
+                else:
+                    changes = {"nombre": selected_name.strip(), "usuario": selected_username.strip().lower(),
+                               "rol": selected_role, "activo": selected_active}
+                    edit(T["users"], changes, {"id": selected_id})
+                    for field, old_value, new_value in [
+                        ("nombre", selected["nombre"], changes["nombre"]),
+                        ("usuario", selected["usuario"], changes["usuario"]),
+                        ("rol", str(selected["rol"]).upper(), selected_role),
+                        ("activo", bool(selected["activo"]), selected_active),
+                    ]:
+                        if str(old_value) != str(new_value):
+                            audit("app_users", selected_id, field, old_value, new_value,
+                                  "Configuración de acceso por Jefatura", user_id)
+                    st.success("Usuario actualizado.")
+                    st.rerun()
+
+            st.markdown("#### Restablecer PIN")
+            new_pin = st.text_input("Nuevo PIN", type="password", key="reset_pin")
+            confirm_pin = st.text_input("Confirmar nuevo PIN", type="password", key="confirm_reset_pin")
+            if st.button("Restablecer PIN", use_container_width=True):
+                if not new_pin.isdigit() or len(new_pin) not in (4, 6):
+                    st.error("El PIN debe tener 4 o 6 dígitos.")
+                elif new_pin != confirm_pin:
+                    st.error("Los PIN no coinciden.")
+                else:
+                    edit(T["users"], {"clave_hash": hash_password(new_pin)}, {"id": selected_id})
+                    audit("app_users", selected_id, "clave_hash", "Protegido", "Actualizado",
+                          "Restablecimiento de PIN por Jefatura", user_id)
+                    st.success("PIN restablecido.")
+
+    with create_tab:
+        st.caption("Puedes usar un nombre provisional y reemplazarlo cuando recibas la relación oficial.")
+        with st.form("create_user", clear_on_submit=True):
+            new_name = st.text_input("Nombre", placeholder="Ejemplo: Asistente Turno Día")
+            new_username = st.text_input("Usuario", placeholder="Ejemplo: asistente.dia")
+            new_role = st.selectbox("Rol", ["ASISTENTE", "SUPERVISOR", "JEFATURA"], key="new_role")
+            new_user_pin = st.text_input("PIN inicial", type="password")
+            new_user_pin_confirm = st.text_input("Confirmar PIN", type="password")
+            st.text_input("Operación", "Lavado de jabas", disabled=True, key="new_operation")
+            if st.form_submit_button("Crear usuario", type="primary", use_container_width=True):
+                duplicate = all_users[all_users["usuario"].astype(str).str.lower() == new_username.strip().lower()]
+                if not new_name.strip() or not new_username.strip():
+                    st.error("Nombre y usuario son obligatorios.")
+                elif not duplicate.empty:
+                    st.error("Ese nombre de usuario ya existe.")
+                elif not new_user_pin.isdigit() or len(new_user_pin) not in (4, 6):
+                    st.error("El PIN debe tener 4 o 6 dígitos.")
+                elif new_user_pin != new_user_pin_confirm:
+                    st.error("Los PIN no coinciden.")
+                else:
+                    created = add(T["users"], {"nombre": new_name.strip(),
+                                                "usuario": new_username.strip().lower(),
+                                                "clave_hash": hash_password(new_user_pin),
+                                                "rol": new_role, "activo": True,
+                                                "creado_en": now()})
+                    audit("app_users", str(created["id"]), "registro", None, "Creado",
+                          "Usuario creado por Jefatura", user_id)
+                    st.success("Usuario creado correctamente.")
+                    st.rerun()
 
 elif role == "JEFATURA":
     st.title(page)
