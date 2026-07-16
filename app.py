@@ -54,6 +54,32 @@ OPERACIONES = [
                     "Mecanizado · Montacarguistas"],
     },
 ]
+SHIFT_SCHEDULES = {
+    "Lavado de jabas": [
+        {"label": "Mañana", "code": "DIA", "start": "06:00", "end": "18:00"},
+        {"label": "Tarde", "code": "NOCHE", "start": "18:00", "end": "06:00"},
+    ],
+    "Distribución de jabas": [
+        {"label": "Mañana", "code": "DIA", "start": "06:00", "end": "14:45"},
+        {"label": "Tarde", "code": "DIA", "start": "15:00", "end": "23:45"},
+        {"label": "Noche", "code": "NOCHE", "start": "23:45", "end": "06:00"},
+    ],
+    "Luminarias": [
+        {"label": "Mañana", "code": "DIA", "start": "06:00", "end": "14:45"},
+        {"label": "Tarde", "code": "DIA", "start": "14:00", "end": "22:45"},
+        {"label": "Noche", "code": "NOCHE", "start": "22:00", "end": "06:45"},
+    ],
+    "Acarreo de fruta": [
+        {"label": "Mañana", "code": "DIA", "start": "03:00", "end": "11:45"},
+        {"label": "Día", "code": "DIA", "start": "06:00", "end": "14:45"},
+        {"label": "Noche", "code": "NOCHE", "start": "16:00", "end": "00:45"},
+    ],
+    "Acopios": [
+        {"label": "Mañana", "code": "DIA", "start": "03:00", "end": "11:45"},
+        {"label": "Día", "code": "DIA", "start": "06:00", "end": "14:45"},
+        {"label": "Noche", "code": "NOCHE", "start": "16:00", "end": "00:45"},
+    ],
+}
 LIMA = ZoneInfo("America/Lima")
 
 
@@ -277,7 +303,9 @@ st.sidebar.caption("Base central: Supabase")
 
 def turn_label(row):
     assistant = user_by_id.get(str(row["asistente_id"]), "Sin asignar")
-    return f"{row['fecha']} | {row['tipo_turno']} | {assistant} | {row['estado']}"
+    shift = shift_label_for_row(row)
+    status = STATUS_LABELS.get(row["estado"], row["estado"])
+    return f"{row['fecha']} | {shift} | {assistant} | {status}"
 
 
 def filter_current_operation(data):
@@ -304,6 +332,15 @@ RESULT_LABELS = {
     "Acarreo de fruta": "Movimientos realizados",
     "Acopios": "Jabas atendidas",
 }
+
+
+def shift_label_for_row(row):
+    start = str(row.get("hora_programada_inicio", ""))[:5]
+    end = str(row.get("hora_programada_fin", ""))[:5]
+    for schedule in SHIFT_SCHEDULES[selected_operation]:
+        if schedule["start"] == start and schedule["end"] == end:
+            return schedule["label"]
+    return str(row.get("tipo_turno", "Turno")).title()
 
 
 def incident_summary(data):
@@ -335,7 +372,7 @@ def turn_summary(data):
         total = int(personal["cantidad_personas"].fillna(0).sum()) if not personal.empty else 0
         rows.append({
             "Fecha": item["fecha"],
-            "Turno": item["tipo_turno"].title(),
+            "Turno": shift_label_for_row(item),
             "Asistente": user_by_id.get(str(item["asistente_id"]), "Sin asignar"),
             "Personal": total,
             "Estado": STATUS_LABELS.get(item["estado"], item["estado"]),
@@ -381,11 +418,13 @@ elif role == "ASISTENTE" and page == "Abrir turno":
     with st.form("open"):
         c1, c2 = st.columns(2)
         day = c1.date_input("Fecha", date.today())
-        shift = c2.selectbox("Turno", ["Día", "Noche"])
-        defaults = {"Día": ("06:00", "18:00"), "Noche": ("18:00", "06:00")}
+        schedules = SHIFT_SCHEDULES[selected_operation]
+        schedule_by_label = {item["label"]: item for item in schedules}
+        shift = c2.selectbox("Turno", list(schedule_by_label))
+        selected_schedule = schedule_by_label[shift]
         c1, c2 = st.columns(2)
-        start = c1.time_input("Inicio", time.fromisoformat(defaults[shift][0]))
-        end = c2.time_input("Fin programado", time.fromisoformat(defaults[shift][1]))
+        start = c1.time_input("Inicio", time.fromisoformat(selected_schedule["start"]), disabled=True)
+        end = c2.time_input("Fin programado", time.fromisoformat(selected_schedule["end"]), disabled=True)
         st.markdown("#### Personal por labor o integrante")
         default_quantities = [10, 4, 2] if selected_operation == "Lavado de jabas" else [0] * len(LABORES)
         quantities = [
@@ -425,10 +464,15 @@ elif role == "ASISTENTE" and page == "Abrir turno":
         observation = st.text_area("Observación")
         if st.form_submit_button("Enviar al supervisor", type="primary", use_container_width=True):
             try:
-                shift_code = "DIA" if shift == "Día" else "NOCHE"
-                existing = filter_current_operation(pd.DataFrame(get(T["turnos"], {
+                shift_code = selected_schedule["code"]
+                existing_df = filter_current_operation(pd.DataFrame(get(T["turnos"], {
                     "fecha": str(day), "tipo_turno": shift_code, "asistente_id": user_id,
-                }))).to_dict("records")
+                })))
+                if not existing_df.empty:
+                    existing_df = existing_df[
+                        existing_df["hora_programada_inicio"].astype(str).str[:5] == selected_schedule["start"]
+                    ]
+                existing = existing_df.to_dict("records")
                 if existing:
                     st.session_state[opening_result_key] = {
                         "fecha": str(day), "turno": shift, "estado": existing[0]["estado"],
