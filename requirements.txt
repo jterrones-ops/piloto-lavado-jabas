@@ -1,3 +1,4 @@
 streamlit>=1.40
 pandas>=2.2
 supabase>=2.10,<3
+bcrypt>=4.2,<6
