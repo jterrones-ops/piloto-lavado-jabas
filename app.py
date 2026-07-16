@@ -25,13 +25,34 @@ INCIDENCIAS = ["Falta de agua", "Falla de equipo", "Falta de energía", "Falta d
                "Falta de personal", "Limpieza del área", "Desperfecto mecánico",
                "Acumulación de jabas", "Otro"]
 OPERACIONES = [
-    ("📋", "Planificación y asignación de recursos logísticos", False),
-    ("🚜", "Solicitud y recepción de unidades de Maquinaria", False),
-    ("🧼", "Lavado de jabas", True),
-    ("📦", "Distribución de jabas", False),
-    ("💡", "Gestión de luminarias y distribución de materiales", False),
-    ("👷", "Distribución de estibadores y operaciones en acopio", False),
-    ("🚚", "Traslado y acarreo de fruta", False),
+    {
+        "icon": "🧼", "name": "Lavado de jabas", "enabled": True,
+        "responsables": ["Asistente · Rafael Zapata"],
+        "labores": ["Lavado de jabas", "Secado de jabas", "Limpieza de lámina burbupack"],
+    },
+    {
+        "icon": "📦", "name": "Distribución de jabas", "enabled": False,
+        "responsables": ["Supervisor · Luis Macea"],
+        "labores": ["Colocar hilo nylon", "Colocar lámina", "Burbupack", "Estiba de jabas",
+                    "Desestiba de jabas en puntos de cosecha"],
+    },
+    {
+        "icon": "💡", "name": "Luminarias", "enabled": False,
+        "responsables": ["Supervisor · Por definir"],
+        "labores": ["Carga de luminarias", "Distribución de luminarias a campo",
+                    "Distribución de materiales para cosecha"],
+    },
+    {
+        "icon": "🚜", "name": "Acarreo de fruta", "enabled": False,
+        "responsables": ["Supervisor · Enisban Calle", "Supervisor · Juan Cruz"],
+        "labores": ["Lote → Acopio: motocarrones, tractores y carretas",
+                    "Acopio → Packing: motocarrones, tractores y carretas"],
+    },
+    {
+        "icon": "🏭", "name": "Acopios", "enabled": False,
+        "responsables": ["Supervisor · Andrés Villegas"],
+        "labores": ["Asistente de acopio", "Estibadores (operarios)", "Montacarguistas"],
+    },
 ]
 LIMA = ZoneInfo("America/Lima")
 
@@ -206,9 +227,16 @@ if not st.session_state.get("selected_operation"):
     for row_start in range(0, len(OPERACIONES), 2):
         columns = st.columns(2)
         for column, operation in zip(columns, OPERACIONES[row_start:row_start + 2]):
-            icon, name, enabled = operation
+            icon = operation["icon"]
+            name = operation["name"]
+            enabled = operation["enabled"]
             with column.container(border=True):
                 st.subheader(f"{icon} {name}")
+                for responsible in operation["responsables"]:
+                    st.caption(responsible)
+                st.markdown("**Labores**")
+                for task in operation["labores"]:
+                    st.markdown(f"- {task}")
                 if enabled:
                     st.success("Disponible")
                     if st.button("Ingresar", key=f"open_{row_start}_{name}",
@@ -544,7 +572,7 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
             selected_username = st.text_input("Usuario", str(selected["usuario"]), key="edit_username")
             selected_role = st.selectbox("Rol", roles, index=roles.index(str(selected["rol"]).upper()))
             selected_active = st.checkbox("Acceso activo", value=bool(selected["activo"]))
-            operation_names = [name for _, name, _ in OPERACIONES]
+            operation_names = [operation["name"] for operation in OPERACIONES]
             current_operation = assigned_operation(selected_id)
             selected_operation = st.selectbox(
                 "Operación principal",
@@ -614,7 +642,7 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
             new_user_password = st.text_input("Contraseña inicial", type="password")
             new_user_password_confirm = st.text_input("Confirmar contraseña", type="password")
             new_user_operation = st.selectbox(
-                "Operación principal", [name for _, name, _ in OPERACIONES], key="new_operation"
+                "Operación principal", [operation["name"] for operation in OPERACIONES], key="new_operation"
             )
             if st.form_submit_button("Crear usuario", type="primary", use_container_width=True):
                 duplicate = all_users[all_users["usuario"].astype(str).str.lower() == new_username.strip().lower()]
