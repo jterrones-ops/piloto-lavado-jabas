@@ -388,8 +388,6 @@ def turn_summary(data):
             quantity = detail.get("cantidad_personas", 0)
             quantity = 0 if pd.isna(quantity) else int(quantity)
             rows.append({
-                "Fecha": item["fecha"],
-                "Turno": shift_label_for_row(item),
                 "Subproceso": detail.get("labor", "Sin distribución"),
                 "Personal": quantity,
                 "Estado": STATUS_LABELS.get(item["estado"], item["estado"]),
@@ -399,6 +397,32 @@ def turn_summary(data):
                 "Hora final": display_clock(detail.get("hora_fin")),
             })
     return pd.DataFrame(rows)
+
+
+def today_turns(data):
+    if data.empty or "fecha" not in data:
+        return data
+    today_value = str(datetime.now(LIMA).date())
+    return data[data["fecha"].astype(str) == today_value]
+
+
+def render_daily_turn_table(data, key):
+    today_value = datetime.now(LIMA).date()
+    st.markdown(f"**Fecha: {today_value.strftime('%d/%m/%Y')}**")
+    daily = today_turns(data)
+    if daily.empty:
+        st.info("No hay turnos registrados para hoy.")
+        return
+    daily = daily.copy()
+    daily["_turno_visible"] = [shift_label_for_row(row) for _, row in daily.iterrows()]
+    ordered_shifts = [item["label"] for item in SHIFT_SCHEDULES[selected_operation]]
+    available_shifts = [shift for shift in ordered_shifts if shift in set(daily["_turno_visible"])]
+    for shift in daily["_turno_visible"].dropna().unique():
+        if shift not in available_shifts:
+            available_shifts.append(shift)
+    selected_shift = st.selectbox("Turno", available_shifts, key=key)
+    selected_rows = daily[daily["_turno_visible"] == selected_shift].drop(columns=["_turno_visible"])
+    st.dataframe(turn_summary(selected_rows), width="stretch", hide_index=True)
 
 
 def choose_turn(statuses, assistant_id=None):
@@ -416,10 +440,7 @@ def choose_turn(statuses, assistant_id=None):
 if role == "ASISTENTE" and page == "Inicio":
     st.title(selected_operation)
     data = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
-    if data.empty:
-        st.info("Sin turnos registrados.")
-    else:
-        st.dataframe(turn_summary(data), width="stretch", hide_index=True)
+    render_daily_turn_table(data, "assistant_daily_shift")
 
 elif role == "ASISTENTE" and page == "Abrir turno":
     st.title("Abrir turno")
@@ -664,13 +685,12 @@ elif role == "ASISTENTE" and page == "Cerrar turno":
 
 elif role == "SUPERVISOR" and page == "Panel":
     st.title(f"Panel supervisor · {selected_operation}")
-    data = filter_current_operation(frame(T["turnos"]))
+    data = today_turns(filter_current_operation(frame(T["turnos"])))
     metric_labels = [("ABIERTO", "Por confirmar"), ("CONFIRMADO", "En ejecución"),
                      ("CERRADO", "Cierres pendientes"), ("VALIDADO", "Finalizados")]
     for column, (status, label_text) in zip(st.columns(4), metric_labels):
         column.metric(label_text, int((data["estado"] == status).sum()) if not data.empty else 0)
-    if not data.empty:
-        st.dataframe(turn_summary(data), width="stretch", hide_index=True)
+    render_daily_turn_table(data, "supervisor_daily_shift")
 
 elif role == "SUPERVISOR" and page == "Confirmar apertura":
     st.title("Confirmar apertura")
@@ -854,18 +874,15 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
 elif role == "JEFATURA":
     st.title(f"{page} · {selected_operation}")
     if page in ["Panel", "Turnos"]:
-        data = filter_current_operation(frame(T["turnos"]))
+        data = today_turns(filter_current_operation(frame(T["turnos"])))
         if page == "Panel":
             metric_labels = [("ABIERTO", "Por confirmar"), ("CONFIRMADO", "En ejecución"),
                              ("CERRADO", "Cierres pendientes"), ("VALIDADO", "Finalizados")]
             for column, (status, label_text) in zip(st.columns(4), metric_labels):
                 column.metric(label_text, int((data["estado"] == status).sum()) if not data.empty else 0)
-        if data.empty:
-            st.info("Sin turnos registrados en esta operación.")
-        else:
-            st.dataframe(turn_summary(data), width="stretch", hide_index=True)
+        render_daily_turn_table(data, f"management_daily_shift_{page}")
     elif page == "Incidencias":
-        turns = filter_current_operation(frame(T["turnos"]))
+        turns = today_turns(filter_current_operation(frame(T["turnos"])))
         incidents = frame(T["inc"])
         if turns.empty or incidents.empty:
             st.info("Sin incidencias registradas en esta operación.")
