@@ -365,18 +365,39 @@ def transfer_summary(data):
     })
 
 
+def display_clock(value, fallback=None):
+    if value is None or pd.isna(value) or str(value).strip() in ("", "None", "NaT"):
+        return fallback or "Pendiente"
+    text = str(value)
+    if "T" not in text and len(text) >= 5:
+        return text[:5]
+    try:
+        return pd.to_datetime(value).strftime("%H:%M")
+    except (TypeError, ValueError):
+        return text[:5]
+
+
 def turn_summary(data):
     rows = []
-    for _, item in data.head(10).iterrows():
+    for _, item in data.head(30).iterrows():
         personal = frame(T["personal"], {"turno_id": str(item["id"])})
-        total = int(personal["cantidad_personas"].fillna(0).sum()) if not personal.empty else 0
-        rows.append({
-            "Fecha": item["fecha"],
-            "Turno": shift_label_for_row(item),
-            "Asistente": user_by_id.get(str(item["asistente_id"]), "Sin asignar"),
-            "Personal": total,
-            "Estado": STATUS_LABELS.get(item["estado"], item["estado"]),
-        })
+        if personal.empty:
+            personal = pd.DataFrame([{"labor": "Sin distribución", "cantidad_personas": 0,
+                                      "hora_inicio": None, "hora_fin": None}])
+        for _, detail in personal.iterrows():
+            quantity = detail.get("cantidad_personas", 0)
+            quantity = 0 if pd.isna(quantity) else int(quantity)
+            rows.append({
+                "Fecha": item["fecha"],
+                "Turno": shift_label_for_row(item),
+                "Subproceso": detail.get("labor", "Sin distribución"),
+                "Personal": quantity,
+                "Estado": STATUS_LABELS.get(item["estado"], item["estado"]),
+                "Hora inicio": display_clock(
+                    detail.get("hora_inicio"), str(item.get("hora_programada_inicio", ""))[:5]
+                ),
+                "Hora final": display_clock(detail.get("hora_fin")),
+            })
     return pd.DataFrame(rows)
 
 
