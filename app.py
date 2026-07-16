@@ -134,15 +134,26 @@ if not st.session_state.get("authenticated"):
     st.subheader("Ingreso al sistema")
     st.caption("Identifícate para consultar las operaciones disponibles.")
     with st.form("login"):
-        login_user = st.text_input("Usuario", placeholder="Escribe tu usuario")
+        login_user = st.text_input(
+            "Usuario o nombre",
+            placeholder="Ejemplo: asistente.piloto o Asistente Piloto",
+        )
         login_password = st.text_input("Contraseña", type="password", placeholder="Escribe tu contraseña")
         login_button = st.form_submit_button("INGRESAR", type="primary", use_container_width=True)
         if login_button:
-            match = users[users["usuario"].astype(str).str.lower() == login_user.strip().lower()] if not users.empty else pd.DataFrame()
-            if match.empty or not password_is_valid(login_password, match.iloc[0]["clave_hash"]):
+            entered_identity = login_user.strip().lower()
+            matches = users[
+                (users["usuario"].astype(str).str.lower() == entered_identity)
+                | (users["nombre"].astype(str).str.lower() == entered_identity)
+            ] if not users.empty else pd.DataFrame()
+            account = None
+            for _, candidate in matches.iterrows():
+                if password_is_valid(login_password, candidate["clave_hash"]):
+                    account = candidate
+                    break
+            if account is None:
                 st.error("Usuario o contraseña incorrectos.")
             else:
-                account = match.iloc[0]
                 st.session_state["authenticated"] = True
                 st.session_state["user_id"] = str(account["id"])
                 st.rerun()
