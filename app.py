@@ -13,7 +13,7 @@ st.set_page_config(page_title="Piloto Lavado de Jabas", page_icon="🧼", layout
 T = {
     "users": "app_users", "turnos": "turnos", "personal": "personal_labor",
     "inc": "incidencias", "tras": "traslados_personal",
-    "prod": "produccion_turno", "audit": "auditoria",
+    "prod": "produccion_turno", "audit": "auditoria", "config": "configuracion",
 }
 LABORES = ["Lavado de jabas", "Secado de jabas", "Limpieza de lámina burbupack"]
 INCIDENCIAS = ["Falta de agua", "Falla de equipo", "Falta de energía", "Falta de jabas",
@@ -83,6 +83,20 @@ def edit(table, data, filters):
     for key, value in filters.items():
         query = query.eq(key, value)
     return query.execute().data or []
+
+
+def assigned_operation(account_id):
+    rows = get(T["config"], {"clave": f"operacion_usuario:{account_id}"}, order=None)
+    return rows[0]["valor"] if rows else "Lavado de jabas"
+
+
+def save_assigned_operation(account_id, operation):
+    sb.table(T["config"]).upsert({
+        "clave": f"operacion_usuario:{account_id}",
+        "valor": operation,
+        "descripcion": "Operación principal asignada al usuario",
+        "actualizado_en": now(),
+    }, on_conflict="clave").execute()
 
 
 def audit(table, record_id, field, old, new, reason, user_id):
@@ -169,6 +183,7 @@ user_row = current.iloc[0]
 user_id = str(user_row["id"])
 user_name = str(user_row["nombre"])
 role = str(user_row["rol"]).upper()
+user_operation = assigned_operation(user_id)
 
 st.sidebar.title("Operaciones Logísticas")
 st.sidebar.write(f"**{user_name}**")
@@ -176,6 +191,9 @@ st.sidebar.caption(role.title())
 if st.sidebar.button("Cerrar sesión", use_container_width=True):
     st.session_state.clear()
     st.rerun()
+
+if role in ("ASISTENTE", "SUPERVISOR"):
+    st.session_state["selected_operation"] = user_operation
 
 if not st.session_state.get("selected_operation"):
     st.title("Inicio")
@@ -199,9 +217,14 @@ if not st.session_state.get("selected_operation"):
     st.stop()
 
 st.sidebar.caption(f"Operación: {st.session_state['selected_operation']}")
-if st.sidebar.button("Cambiar operación", use_container_width=True):
+if role == "JEFATURA" and st.sidebar.button("Cambiar operación", use_container_width=True):
     st.session_state.pop("selected_operation", None)
     st.rerun()
+
+if st.session_state["selected_operation"] != "Lavado de jabas":
+    st.title(st.session_state["selected_operation"])
+    st.info("Este módulo se encuentra en preparación.")
+    st.stop()
 
 menus = {
     "ASISTENTE": ["Inicio", "Abrir turno", "Operación", "Cerrar turno"],
@@ -468,9 +491,12 @@ elif role == "SUPERVISOR" and page == "Validar cierre":
 
 elif role == "JEFATURA" and page == "Usuarios y accesos":
     st.title("Usuarios y accesos")
-    st.caption("Jefatura define quién puede ingresar y con qué rol. Operación activa: Lavado de jabas.")
+    st.caption("Jefatura define quién puede ingresar, con qué rol y a qué operación será dirigido.")
     display = all_users[["nombre", "usuario", "rol", "activo"]].copy()
-    display["operación"] = "Lavado de jabas"
+    display["operación"] = [
+        "Acceso global" if str(row["rol"]).upper() == "JEFATURA" else assigned_operation(str(row["id"]))
+        for _, row in all_users.iterrows()
+    ]
     st.dataframe(display, width="stretch", hide_index=True)
     edit_tab, create_tab = st.tabs(["Configurar usuario", "Nuevo usuario"])
     with edit_tab:
@@ -484,7 +510,14 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
             selected_username = st.text_input("Usuario", str(selected["usuario"]), key="edit_username")
             selected_role = st.selectbox("Rol", roles, index=roles.index(str(selected["rol"]).upper()))
             selected_active = st.checkbox("Acceso activo", value=bool(selected["activo"]))
-            st.text_input("Operación asignada", "Lavado de jabas", disabled=True)
+            operation_names = [name for _, name, _ in OPERACIONES]
+            current_operation = assigned_operation(selected_id)
+            selected_operation = st.selectbox(
+                "Operación principal",
+                operation_names,
+                index=operation_names.index(current_operation) if current_operation in operation_names else 0,
+                disabled=selected_role == "JEFATURA",
+            )
             if st.button("Guardar cambios", type="primary", use_container_width=True):
                 duplicate = all_users[
                     (all_users["usuario"].astype(str).str.lower() == selected_username.strip().lower())
@@ -500,6 +533,9 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
                     changes = {"nombre": selected_name.strip(), "usuario": selected_username.strip().lower(),
                                "rol": selected_role, "activo": selected_active}
                     edit(T["users"], changes, {"id": selected_id})
+                    old_operation = assigned_operation(selected_id)
+                    if selected_role != "JEFATURA":
+                        save_assigned_operation(selected_id, selected_operation)
                     for field, old_value, new_value in [
                         ("nombre", selected["nombre"], changes["nombre"]),
                         ("usuario", selected["usuario"], changes["usuario"]),
@@ -509,6 +545,9 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
                         if str(old_value) != str(new_value):
                             audit("app_users", selected_id, field, old_value, new_value,
                                   "Configuración de acceso por Jefatura", user_id)
+                    if selected_role != "JEFATURA" and old_operation != selected_operation:
+                        audit("app_users", selected_id, "operacion", old_operation, selected_operation,
+                              "Asignación de operación por Jefatura", user_id)
                     st.success("Usuario actualizado.")
                     st.rerun()
 
@@ -540,7 +579,9 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
             new_role = st.selectbox("Rol", ["ASISTENTE", "SUPERVISOR", "JEFATURA"], key="new_role")
             new_user_password = st.text_input("Contraseña inicial", type="password")
             new_user_password_confirm = st.text_input("Confirmar contraseña", type="password")
-            st.text_input("Operación", "Lavado de jabas", disabled=True, key="new_operation")
+            new_user_operation = st.selectbox(
+                "Operación principal", [name for _, name, _ in OPERACIONES], key="new_operation"
+            )
             if st.form_submit_button("Crear usuario", type="primary", use_container_width=True):
                 duplicate = all_users[all_users["usuario"].astype(str).str.lower() == new_username.strip().lower()]
                 if not new_name.strip() or not new_username.strip():
@@ -557,6 +598,8 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
                                                 "clave_hash": hash_password(new_user_password),
                                                 "rol": new_role, "activo": True,
                                                 "creado_en": now()})
+                    if new_role != "JEFATURA":
+                        save_assigned_operation(str(created["id"]), new_user_operation)
                     audit("app_users", str(created["id"]), "registro", None, "Creado",
                           "Usuario creado por Jefatura", user_id)
                     st.success("Usuario creado correctamente.")
