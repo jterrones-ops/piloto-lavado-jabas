@@ -501,23 +501,19 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
                     st.success("Usuario actualizado.")
                     st.rerun()
 
-            st.markdown("#### Restablecer PIN")
-            new_pin = st.text_input("Nuevo PIN", type="password", key="reset_pin")
-            confirm_pin = st.text_input("Confirmar nuevo PIN", type="password", key="confirm_reset_pin")
-            if st.button("Restablecer PIN", use_container_width=True):
-                clean_pin = new_pin.strip()
-                clean_confirmation = confirm_pin.strip()
-                if not clean_pin.isdecimal():
-                    st.error("El PIN debe contener únicamente números, sin letras ni símbolos.")
-                elif len(clean_pin) not in (4, 6):
-                    st.error("El PIN debe tener exactamente 4 o 6 dígitos.")
-                elif clean_pin != clean_confirmation:
-                    st.error("Los PIN no coinciden.")
+            st.markdown("#### Restablecer contraseña")
+            new_password = st.text_input("Nueva contraseña", type="password", key="reset_password")
+            confirm_password = st.text_input("Confirmar nueva contraseña", type="password", key="confirm_reset_password")
+            if st.button("Restablecer contraseña", use_container_width=True):
+                if not new_password:
+                    st.error("La contraseña no puede estar vacía.")
+                elif new_password != confirm_password:
+                    st.error("Las contraseñas no coinciden.")
                 else:
-                    edit(T["users"], {"clave_hash": hash_password(clean_pin)}, {"id": selected_id})
+                    edit(T["users"], {"clave_hash": hash_password(new_password)}, {"id": selected_id})
                     audit("app_users", selected_id, "clave_hash", "Protegido", "Actualizado",
-                          "Restablecimiento de PIN por Jefatura", user_id)
-                    st.success("PIN restablecido.")
+                          "Restablecimiento de contraseña por Jefatura", user_id)
+                    st.success("Contraseña restablecida.")
 
     with create_tab:
         st.caption("Puedes usar un nombre provisional y reemplazarlo cuando recibas la relación oficial.")
@@ -525,27 +521,23 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
             new_name = st.text_input("Nombre", placeholder="Ejemplo: Asistente Turno Día")
             new_username = st.text_input("Usuario", placeholder="Ejemplo: asistente.dia")
             new_role = st.selectbox("Rol", ["ASISTENTE", "SUPERVISOR", "JEFATURA"], key="new_role")
-            new_user_pin = st.text_input("PIN inicial", type="password")
-            new_user_pin_confirm = st.text_input("Confirmar PIN", type="password")
+            new_user_password = st.text_input("Contraseña inicial", type="password")
+            new_user_password_confirm = st.text_input("Confirmar contraseña", type="password")
             st.text_input("Operación", "Lavado de jabas", disabled=True, key="new_operation")
             if st.form_submit_button("Crear usuario", type="primary", use_container_width=True):
-                clean_new_pin = new_user_pin.strip()
-                clean_new_confirmation = new_user_pin_confirm.strip()
                 duplicate = all_users[all_users["usuario"].astype(str).str.lower() == new_username.strip().lower()]
                 if not new_name.strip() or not new_username.strip():
                     st.error("Nombre y usuario son obligatorios.")
                 elif not duplicate.empty:
                     st.error("Ese nombre de usuario ya existe.")
-                elif not clean_new_pin.isdecimal():
-                    st.error("El PIN debe contener únicamente números, sin letras ni símbolos.")
-                elif len(clean_new_pin) not in (4, 6):
-                    st.error("El PIN debe tener exactamente 4 o 6 dígitos.")
-                elif clean_new_pin != clean_new_confirmation:
-                    st.error("Los PIN no coinciden.")
+                elif not new_user_password:
+                    st.error("La contraseña no puede estar vacía.")
+                elif new_user_password != new_user_password_confirm:
+                    st.error("Las contraseñas no coinciden.")
                 else:
                     created = add(T["users"], {"nombre": new_name.strip(),
                                                 "usuario": new_username.strip().lower(),
-                                                "clave_hash": hash_password(clean_new_pin),
+                                                "clave_hash": hash_password(new_user_password),
                                                 "rol": new_role, "activo": True,
                                                 "creado_en": now()})
                     audit("app_users", str(created["id"]), "registro", None, "Creado",
