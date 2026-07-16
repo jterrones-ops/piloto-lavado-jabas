@@ -235,6 +235,7 @@ user_row = current.iloc[0]
 user_id = str(user_row["id"])
 user_name = str(user_row["nombre"])
 role = str(user_row["rol"]).upper()
+account_role = role
 user_operation = assigned_operation(user_id)
 
 st.sidebar.title("Operaciones Logísticas")
@@ -276,13 +277,24 @@ if not st.session_state.get("selected_operation"):
     st.stop()
 
 st.sidebar.caption(f"Operación: {st.session_state['selected_operation']}")
-if role == "JEFATURA" and st.sidebar.button("Cambiar operación", use_container_width=True):
+if account_role == "JEFATURA" and st.sidebar.button("Cambiar operación", use_container_width=True):
     st.session_state.pop("selected_operation", None)
     st.rerun()
 
 selected_operation = st.session_state["selected_operation"]
 operation_config = next(operation for operation in OPERACIONES if operation["name"] == selected_operation)
 LABORES = operation_config["labores"]
+
+if account_role == "JEFATURA":
+    test_modes = {
+        "Jefatura": "JEFATURA",
+        "Asistente (pruebas)": "ASISTENTE",
+        "Supervisor (pruebas)": "SUPERVISOR",
+    }
+    selected_mode = st.sidebar.selectbox("Ver sistema como", list(test_modes), key="management_test_mode")
+    role = test_modes[selected_mode]
+    if role != "JEFATURA":
+        st.sidebar.info(f"Modo de pruebas: {selected_mode}")
 
 menus = {
     "ASISTENTE": ["Inicio", "Abrir turno", "Operación", "Cerrar turno"],
@@ -444,7 +456,7 @@ if role == "ASISTENTE" and page == "Inicio":
 
 elif role == "ASISTENTE" and page == "Abrir turno":
     st.title("Abrir turno")
-    opening_result_key = f"opening_result_{user_id}"
+    opening_result_key = f"opening_result_{user_id}_{selected_operation}"
     if st.session_state.get(opening_result_key):
         result = st.session_state[opening_result_key]
         st.success("Apertura enviada correctamente al supervisor.")
