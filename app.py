@@ -502,18 +502,24 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
                     st.rerun()
 
             st.markdown("#### Restablecer contraseña")
-            new_password = st.text_input("Nueva contraseña", type="password", key="reset_password")
-            confirm_password = st.text_input("Confirmar nueva contraseña", type="password", key="confirm_reset_password")
-            if st.button("Restablecer contraseña", use_container_width=True):
-                if not new_password:
-                    st.error("La contraseña no puede estar vacía.")
-                elif new_password != confirm_password:
-                    st.error("Las contraseñas no coinciden.")
-                else:
-                    edit(T["users"], {"clave_hash": hash_password(new_password)}, {"id": selected_id})
-                    audit("app_users", selected_id, "clave_hash", "Protegido", "Actualizado",
-                          "Restablecimiento de contraseña por Jefatura", user_id)
-                    st.success("Contraseña restablecida.")
+            with st.form(f"reset_password_form_{selected_id}", clear_on_submit=True):
+                new_password = st.text_input(
+                    "Nueva contraseña", type="password", key=f"reset_password_{selected_id}"
+                )
+                confirm_password = st.text_input(
+                    "Confirmar nueva contraseña", type="password", key=f"confirm_reset_password_{selected_id}"
+                )
+                reset_password = st.form_submit_button("Restablecer contraseña", use_container_width=True)
+                if reset_password:
+                    if not new_password:
+                        st.error("La contraseña no puede estar vacía.")
+                    elif new_password != confirm_password:
+                        st.error("Las contraseñas no coinciden.")
+                    else:
+                        edit(T["users"], {"clave_hash": hash_password(new_password)}, {"id": selected_id})
+                        audit("app_users", selected_id, "clave_hash", "Protegido", "Actualizado",
+                              "Restablecimiento de contraseña por Jefatura", user_id)
+                        st.success("Contraseña restablecida correctamente.")
 
     with create_tab:
         st.caption("Puedes usar un nombre provisional y reemplazarlo cuando recibas la relación oficial.")
