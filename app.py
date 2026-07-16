@@ -1,5 +1,9 @@
 from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
+import hashlib
+import hmac
 
+import bcrypt
 import pandas as pd
 import streamlit as st
 from supabase import create_client
@@ -15,6 +19,7 @@ LABORES = ["Lavado de jabas", "Secado de jabas", "Limpieza de lámina burbupack"
 INCIDENCIAS = ["Falta de agua", "Falla de equipo", "Falta de energía", "Falta de jabas",
                "Falta de personal", "Limpieza del área", "Desperfecto mecánico",
                "Acumulación de jabas", "Otro"]
+LIMA = ZoneInfo("America/Lima")
 
 
 @st.cache_resource
@@ -34,11 +39,11 @@ except Exception as e:
 
 
 def now():
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.now(LIMA).isoformat(timespec="seconds")
 
 
 def timestamp(day, clock):
-    return datetime.combine(day, clock).astimezone().isoformat(timespec="seconds")
+    return datetime.combine(day, clock, tzinfo=LIMA).isoformat(timespec="seconds")
 
 
 def get(table, filters=None, order="creado_en"):
@@ -84,28 +89,79 @@ def minutes_between(start, end):
     return max(int((end - start).total_seconds() / 60), 0)
 
 
-users = frame(T["users"], order="nombre")
+def password_is_valid(password, stored_hash):
+    stored_hash = str(stored_hash or "").strip()
+    if not password or not stored_hash:
+        return False
+    try:
+        if stored_hash.startswith(("$2a$", "$2b$", "$2y$")):
+            return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+        if len(stored_hash) == 64:
+            calculated = hashlib.sha256(password.encode("utf-8")).hexdigest()
+            return hmac.compare_digest(calculated.lower(), stored_hash.lower())
+    except (ValueError, TypeError):
+        return False
+    return False
+
+
+all_users = frame(T["users"], order="nombre")
+users = all_users.copy()
 if not users.empty and "activo" in users:
     users = users[users["activo"].fillna(False).astype(bool)]
 user_by_id = {str(row["id"]): row["nombre"] for _, row in users.iterrows()} if not users.empty else {}
 
-st.sidebar.title("🧼 Lavado de jabas")
-role = st.sidebar.selectbox("Ver como", ["ASISTENTE", "SUPERVISOR", "JEFATURA"])
-role_users = users[users["rol"].astype(str).str.upper() == role] if not users.empty else pd.DataFrame()
-if not role_users.empty:
-    options = role_users["nombre"].tolist()
-    user_name = st.sidebar.selectbox("Usuario", options)
-    user_row = role_users[role_users["nombre"] == user_name].iloc[0]
-    user_id = str(user_row["id"])
-else:
-    st.sidebar.error(f"No hay un usuario activo con rol {role}.")
+if not st.session_state.get("authenticated"):
+    st.markdown("""
+    <style>
+    [data-testid="stSidebar"] {display: none;}
+    .block-container {max-width: 560px; padding-top: 4rem;}
+    </style>
+    """, unsafe_allow_html=True)
+    st.title("Control de Operaciones Logísticas")
+    st.subheader("🧼 Lavado de jabas")
+    st.caption("Ingresa con tu cuenta para acceder a la operación asignada.")
+    with st.form("login"):
+        login_user = st.text_input("Usuario", placeholder="Escribe tu usuario")
+        login_password = st.text_input("Contraseña", type="password", placeholder="Escribe tu contraseña")
+        login_button = st.form_submit_button("INGRESAR", type="primary", use_container_width=True)
+        if login_button:
+            match = users[users["usuario"].astype(str).str.lower() == login_user.strip().lower()] if not users.empty else pd.DataFrame()
+            if match.empty or not password_is_valid(login_password, match.iloc[0]["clave_hash"]):
+                st.error("Usuario o contraseña incorrectos.")
+            else:
+                account = match.iloc[0]
+                st.session_state["authenticated"] = True
+                st.session_state["user_id"] = str(account["id"])
+                st.rerun()
+    st.info("Operación disponible: Lavado de jabas")
     st.stop()
+
+current = users[users["id"].astype(str) == str(st.session_state.get("user_id"))]
+if current.empty:
+    st.session_state.clear()
+    st.warning("Tu acceso ya no está activo. Vuelve a ingresar.")
+    st.rerun()
+
+user_row = current.iloc[0]
+user_id = str(user_row["id"])
+user_name = str(user_row["nombre"])
+role = str(user_row["rol"]).upper()
+
+st.sidebar.title("🧼 Lavado de jabas")
+st.sidebar.write(f"**{user_name}**")
+st.sidebar.caption(f"{role.title()} · Lavado de jabas")
+if st.sidebar.button("Cerrar sesión", use_container_width=True):
+    st.session_state.clear()
+    st.rerun()
 
 menus = {
     "ASISTENTE": ["Inicio", "Abrir turno", "Operación", "Cerrar turno"],
     "SUPERVISOR": ["Panel", "Confirmar apertura", "Seguimiento", "Validar cierre"],
-    "JEFATURA": ["Panel", "Turnos", "Incidencias", "Auditoría"],
+    "JEFATURA": ["Panel", "Turnos", "Incidencias", "Auditoría", "Usuarios y accesos"],
 }
+if role not in menus:
+    st.error("El rol de este usuario no está configurado correctamente.")
+    st.stop()
 page = st.sidebar.radio("Menú", menus[role])
 st.sidebar.caption("Base central: Supabase")
 
@@ -181,17 +237,17 @@ elif role == "ASISTENTE" and page == "Operación":
             with st.form("inc"):
                 incident_type = st.selectbox("Tipo", INCIDENCIAS)
                 c1, c2 = st.columns(2)
-                start = c1.time_input("Inicio", datetime.now().time().replace(second=0, microsecond=0))
+                start = c1.time_input("Inicio", datetime.now(LIMA).time().replace(second=0, microsecond=0))
                 close_now = c2.checkbox("Cerrar ahora")
                 end = st.time_input(
                     "Fin",
-                    datetime.now().time().replace(second=0, microsecond=0),
+                    datetime.now(LIMA).time().replace(second=0, microsecond=0),
                     help="Esta hora solo se guardará si marcas 'Cerrar ahora'.",
                 )
                 description = st.text_area("Descripción")
                 if st.form_submit_button("Guardar"):
-                    start_dt = datetime.combine(date.today(), start).astimezone()
-                    end_dt = datetime.combine(date.today(), end).astimezone() if close_now else None
+                    start_dt = datetime.combine(date.today(), start, tzinfo=LIMA)
+                    end_dt = datetime.combine(date.today(), end, tzinfo=LIMA) if close_now else None
                     if end_dt and end_dt <= start_dt:
                         end_dt += timedelta(days=1)
                     add(T["inc"], {
@@ -218,14 +274,14 @@ elif role == "ASISTENTE" and page == "Operación":
                     selected_incident = st.selectbox("Incidencia", list(incident_options))
                     closing_time = st.time_input(
                         "Hora final de la incidencia",
-                        datetime.now().time().replace(second=0, microsecond=0),
+                        datetime.now(LIMA).time().replace(second=0, microsecond=0),
                         key="incident_closing_time",
                     )
                     if st.button("Cerrar incidencia", type="primary", use_container_width=True):
                         incident_id = incident_options[selected_incident]
                         incident_row = open_incidents[open_incidents["id"].astype(str) == incident_id].iloc[0]
                         start_dt = pd.to_datetime(incident_row["hora_inicio"]).to_pydatetime()
-                        end_dt = datetime.combine(start_dt.date(), closing_time).astimezone()
+                        end_dt = datetime.combine(start_dt.date(), closing_time, tzinfo=LIMA)
                         if end_dt <= start_dt:
                             end_dt += timedelta(days=1)
                         duration = minutes_between(start_dt, end_dt)
@@ -270,9 +326,9 @@ elif role == "ASISTENTE" and page == "Cerrar turno":
             washed = st.number_input("Jabas lavadas", 0, 1000000, 0, step=100)
             observation = st.text_area("Observación de cierre")
             if st.form_submit_button("Enviar cierre", type="primary"):
-                end_dt = datetime.combine(date.fromisoformat(str(turn["fecha"])), end).astimezone()
+                end_dt = datetime.combine(date.fromisoformat(str(turn["fecha"])), end, tzinfo=LIMA)
                 start_clock = time.fromisoformat(str(turn["hora_programada_inicio"])[:5])
-                start_dt = datetime.combine(date.fromisoformat(str(turn["fecha"])), start_clock).astimezone()
+                start_dt = datetime.combine(date.fromisoformat(str(turn["fecha"])), start_clock, tzinfo=LIMA)
                 if end_dt <= start_dt:
                     end_dt += timedelta(days=1)
                 total_hours_person = 0.0
@@ -360,6 +416,37 @@ elif role == "SUPERVISOR" and page == "Validar cierre":
                     audit("turnos", turn_id, "estado", "CERRADO", "VALIDADO",
                           "Cierre validado", user_id)
                     st.rerun()
+
+elif role == "JEFATURA" and page == "Usuarios y accesos":
+    st.title("Usuarios y accesos")
+    st.caption("Jefatura define quién puede ingresar y con qué rol. Operación activa: Lavado de jabas.")
+    display = all_users[["nombre", "usuario", "rol", "activo"]].copy()
+    display["operación"] = "Lavado de jabas"
+    st.dataframe(display, width="stretch", hide_index=True)
+    if not all_users.empty:
+        user_options = {f"{row['nombre']} · {row['usuario']}": str(row["id"]) for _, row in all_users.iterrows()}
+        selected_label = st.selectbox("Usuario a configurar", list(user_options))
+        selected_id = user_options[selected_label]
+        selected = all_users[all_users["id"].astype(str) == selected_id].iloc[0]
+        roles = ["ASISTENTE", "SUPERVISOR", "JEFATURA"]
+        selected_role = st.selectbox("Rol", roles, index=roles.index(str(selected["rol"]).upper()))
+        selected_active = st.checkbox("Acceso activo", value=bool(selected["activo"]))
+        st.text_input("Operación asignada", "Lavado de jabas", disabled=True)
+        if st.button("Guardar acceso", type="primary", use_container_width=True):
+            if selected_id == user_id and not selected_active:
+                st.error("No puedes desactivar tu propia cuenta mientras estás conectado.")
+            else:
+                old_role = str(selected["rol"]).upper()
+                old_active = bool(selected["activo"])
+                edit(T["users"], {"rol": selected_role, "activo": selected_active}, {"id": selected_id})
+                if old_role != selected_role:
+                    audit("app_users", selected_id, "rol", old_role, selected_role,
+                          "Configuración de acceso por Jefatura", user_id)
+                if old_active != selected_active:
+                    audit("app_users", selected_id, "activo", old_active, selected_active,
+                          "Configuración de acceso por Jefatura", user_id)
+                st.success("Acceso actualizado.")
+                st.rerun()
 
 elif role == "JEFATURA":
     st.title(page)
