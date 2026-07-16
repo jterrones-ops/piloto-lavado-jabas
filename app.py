@@ -20,7 +20,7 @@ T = {
     "inc": "incidencias", "tras": "traslados_personal",
     "prod": "produccion_turno", "audit": "auditoria", "config": "configuracion",
 }
-LABORES = ["Lavado de jabas", "Secado de jabas", "Limpieza de lámina burbupack"]
+LABORES = ["Lavado", "Secado", "Limpieza de lámina burbupack"]
 INCIDENCIAS = ["Falta de agua", "Falla de equipo", "Falta de energía", "Falta de jabas",
                "Falta de personal", "Limpieza del área", "Desperfecto mecánico",
                "Acumulación de jabas", "Otro"]
@@ -28,30 +28,30 @@ OPERACIONES = [
     {
         "icon": "🧼", "name": "Lavado de jabas", "enabled": True,
         "responsables": ["Asistente · Rafael Zapata"],
-        "labores": ["Lavado de jabas", "Secado de jabas", "Limpieza de lámina burbupack"],
+        "labores": ["Lavado", "Secado", "Limpieza de lámina burbupack"],
     },
     {
-        "icon": "📦", "name": "Distribución de jabas", "enabled": False,
+        "icon": "📦", "name": "Distribución de jabas", "enabled": True,
         "responsables": ["Supervisor · Luis Macea"],
-        "labores": ["Colocar hilo nylon", "Colocar lámina", "Burbupack", "Estiba de jabas",
-                    "Desestiba de jabas en puntos de cosecha"],
+        "labores": ["Colocación de hilo nylon", "Colocación de lámina", "Colocación de burbupack",
+                    "Estiba", "Desestiba en puntos de cosecha"],
     },
     {
-        "icon": "💡", "name": "Luminarias", "enabled": False,
+        "icon": "💡", "name": "Luminarias", "enabled": True,
         "responsables": ["Supervisor · Por definir"],
-        "labores": ["Carga de luminarias", "Distribución de luminarias a campo",
-                    "Distribución de materiales para cosecha"],
+        "labores": ["Carga", "Distribución", "Recojo"],
     },
     {
-        "icon": "🚜", "name": "Acarreo de fruta", "enabled": False,
+        "icon": "🚜", "name": "Acarreo de fruta", "enabled": True,
         "responsables": ["Supervisor · Enisban Calle", "Supervisor · Juan Cruz"],
-        "labores": ["Lote → Acopio: motocarrones, tractores y carretas",
-                    "Acopio → Packing: motocarrones, tractores y carretas"],
+        "labores": ["Lote → Acopio", "Acopio → Packing"],
     },
     {
-        "icon": "🏭", "name": "Acopios", "enabled": False,
+        "icon": "🏭", "name": "Acopios", "enabled": True,
         "responsables": ["Supervisor · Andrés Villegas"],
-        "labores": ["Asistente de acopio", "Estibadores (operarios)", "Montacarguistas"],
+        "labores": ["Manual · Asistente (acopiador)", "Manual · Estibadores",
+                    "Mecanizado · Asistente (acopiador)", "Mecanizado · Estibadores",
+                    "Mecanizado · Montacarguistas"],
     },
 ]
 LIMA = ZoneInfo("America/Lima")
@@ -254,10 +254,9 @@ if role == "JEFATURA" and st.sidebar.button("Cambiar operación", use_container_
     st.session_state.pop("selected_operation", None)
     st.rerun()
 
-if st.session_state["selected_operation"] != "Lavado de jabas":
-    st.title(st.session_state["selected_operation"])
-    st.info("Este módulo se encuentra en preparación.")
-    st.stop()
+selected_operation = st.session_state["selected_operation"]
+operation_config = next(operation for operation in OPERACIONES if operation["name"] == selected_operation)
+LABORES = operation_config["labores"]
 
 menus = {
     "ASISTENTE": ["Inicio", "Abrir turno", "Operación", "Cerrar turno"],
@@ -281,8 +280,71 @@ def turn_label(row):
     return f"{row['fecha']} | {row['tipo_turno']} | {assistant} | {row['estado']}"
 
 
+def filter_current_operation(data):
+    if data.empty or "responsable_operacion" not in data:
+        return data
+    operation_names = [operation["name"] for operation in OPERACIONES]
+    values = data["responsable_operacion"].fillna("").astype(str)
+    if selected_operation == "Lavado de jabas":
+        return data[(values == selected_operation) | (~values.isin(operation_names))]
+    return data[values == selected_operation]
+
+
+STATUS_LABELS = {
+    "ABIERTO": "Esperando supervisor",
+    "CONFIRMADO": "En ejecución",
+    "CERRADO": "Cierre pendiente",
+    "VALIDADO": "Finalizado",
+}
+
+RESULT_LABELS = {
+    "Lavado de jabas": "Jabas lavadas",
+    "Distribución de jabas": "Jabas distribuidas",
+    "Luminarias": "Luminarias gestionadas",
+    "Acarreo de fruta": "Movimientos realizados",
+    "Acopios": "Jabas atendidas",
+}
+
+
+def incident_summary(data):
+    if data.empty:
+        return data
+    columns = ["tipo", "hora_inicio", "hora_fin", "duracion_minutos", "estado"]
+    view = data[[column for column in columns if column in data]].copy()
+    return view.rename(columns={
+        "tipo": "Tipo", "hora_inicio": "Inicio", "hora_fin": "Fin",
+        "duracion_minutos": "Duración (min)", "estado": "Estado",
+    })
+
+
+def transfer_summary(data):
+    if data.empty:
+        return data
+    columns = ["hora_traslado", "labor_origen", "labor_destino", "cantidad_personas", "motivo"]
+    view = data[[column for column in columns if column in data]].copy()
+    return view.rename(columns={
+        "hora_traslado": "Hora", "labor_origen": "Origen", "labor_destino": "Destino",
+        "cantidad_personas": "Personas", "motivo": "Motivo",
+    })
+
+
+def turn_summary(data):
+    rows = []
+    for _, item in data.head(10).iterrows():
+        personal = frame(T["personal"], {"turno_id": str(item["id"])})
+        total = int(personal["cantidad_personas"].fillna(0).sum()) if not personal.empty else 0
+        rows.append({
+            "Fecha": item["fecha"],
+            "Turno": item["tipo_turno"].title(),
+            "Asistente": user_by_id.get(str(item["asistente_id"]), "Sin asignar"),
+            "Personal": total,
+            "Estado": STATUS_LABELS.get(item["estado"], item["estado"]),
+        })
+    return pd.DataFrame(rows)
+
+
 def choose_turn(statuses, assistant_id=None):
-    data = frame(T["turnos"])
+    data = filter_current_operation(frame(T["turnos"]))
     if not data.empty:
         data = data[data["estado"].isin(statuses)]
     if assistant_id and not data.empty:
@@ -294,13 +356,12 @@ def choose_turn(statuses, assistant_id=None):
 
 
 if role == "ASISTENTE" and page == "Inicio":
-    st.title("Piloto Lavado de Jabas")
-    data = frame(T["turnos"], {"asistente_id": user_id})
+    st.title(selected_operation)
+    data = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
     if data.empty:
         st.info("Sin turnos registrados.")
     else:
-        data["asistente"] = data["asistente_id"].astype(str).map(user_by_id)
-        st.dataframe(data, width="stretch", hide_index=True)
+        st.dataframe(turn_summary(data), width="stretch", hide_index=True)
 
 elif role == "ASISTENTE" and page == "Abrir turno":
     st.title("Abrir turno")
@@ -309,7 +370,8 @@ elif role == "ASISTENTE" and page == "Abrir turno":
         result = st.session_state[opening_result_key]
         st.success("Apertura enviada correctamente al supervisor.")
         st.info(
-            f"Fecha: {result['fecha']} · Turno: {result['turno']} · Estado: {result['estado']}"
+            f"Fecha: {result['fecha']} · Turno: {result['turno']} · "
+            f"Estado: {STATUS_LABELS.get(result['estado'], result['estado'])}"
         )
         st.warning("No es necesario volver a enviarla. Espera la confirmación del supervisor.")
         if st.button("Registrar una apertura de otra fecha", use_container_width=True):
@@ -324,14 +386,49 @@ elif role == "ASISTENTE" and page == "Abrir turno":
         c1, c2 = st.columns(2)
         start = c1.time_input("Inicio", time.fromisoformat(defaults[shift][0]))
         end = c2.time_input("Fin programado", time.fromisoformat(defaults[shift][1]))
-        quantities = [st.number_input(labor, 0, 200, value) for labor, value in zip(LABORES, [10, 4, 2])]
+        st.markdown("#### Personal por labor o integrante")
+        default_quantities = [10, 4, 2] if selected_operation == "Lavado de jabas" else [0] * len(LABORES)
+        quantities = [
+            st.number_input(labor, 0, 200, value)
+            for labor, value in zip(LABORES, default_quantities)
+        ]
+        operation_detail = ""
+        if selected_operation == "Acarreo de fruta":
+            st.markdown("#### Equipos — Lote → Acopio")
+            c1, c2, c3 = st.columns(3)
+            la_motofurgones = c1.number_input("Motofurgones", 0, 100, 0, key="la_motofurgones")
+            la_personal_moto = c2.number_input("Personal por motofurgón", 0, 10, 1, key="la_personal_moto")
+            la_tractores = c3.number_input("Tractores", 0, 100, 0, key="la_tractores")
+            c1, c2 = st.columns(2)
+            la_personal_tractor = c1.number_input("Personal por tractor", 0, 10, 1, key="la_personal_tractor")
+            la_carretas = c2.number_input("Carretas", 0, 200, 0, key="la_carretas")
+            st.markdown("#### Equipos — Acopio → Packing")
+            c1, c2, c3 = st.columns(3)
+            ap_tractores = c1.number_input("Tractores ", 0, 100, 0, key="ap_tractores")
+            ap_personal_tractor = c2.number_input("Personal por tractor ", 0, 10, 1, key="ap_personal_tractor")
+            ap_carretas = c3.number_input("Carretas ", 0, 200, 0, key="ap_carretas")
+            exceptional_moto = st.checkbox("Uso excepcional de motofurgón en Acopio → Packing")
+            ap_motofurgones = ap_personal_moto = 0
+            exceptional_reason = ""
+            if exceptional_moto:
+                c1, c2 = st.columns(2)
+                ap_motofurgones = c1.number_input("Motofurgones excepcionales", 1, 100, 1)
+                ap_personal_moto = c2.number_input("Personal por motofurgón excepcional", 1, 10, 1)
+                exceptional_reason = st.text_input("Motivo de la excepción")
+            operation_detail = (
+                f"RECURSOS Lote-Acopio: motofurgones={la_motofurgones}, personal/motofurgón={la_personal_moto}, "
+                f"tractores={la_tractores}, personal/tractor={la_personal_tractor}, carretas={la_carretas}. "
+                f"Acopio-Packing: tractores={ap_tractores}, personal/tractor={ap_personal_tractor}, "
+                f"carretas={ap_carretas}, motofurgones_excepcionales={ap_motofurgones}, "
+                f"personal/motofurgón={ap_personal_moto}, motivo={exceptional_reason or 'No aplica'}."
+            )
         observation = st.text_area("Observación")
         if st.form_submit_button("Enviar al supervisor", type="primary", use_container_width=True):
             try:
                 shift_code = "DIA" if shift == "Día" else "NOCHE"
-                existing = get(T["turnos"], {
+                existing = filter_current_operation(pd.DataFrame(get(T["turnos"], {
                     "fecha": str(day), "tipo_turno": shift_code, "asistente_id": user_id,
-                })
+                }))).to_dict("records")
                 if existing:
                     st.session_state[opening_result_key] = {
                         "fecha": str(day), "turno": shift, "estado": existing[0]["estado"],
@@ -341,8 +438,9 @@ elif role == "ASISTENTE" and page == "Abrir turno":
                         "fecha": str(day), "tipo_turno": shift_code,
                         "hora_programada_inicio": start.strftime("%H:%M"),
                         "hora_programada_fin": end.strftime("%H:%M"),
-                        "asistente_id": user_id, "responsable_operacion": user_name,
-                        "estado": "ABIERTO", "observacion_apertura": observation,
+                        "asistente_id": user_id, "responsable_operacion": selected_operation,
+                        "estado": "ABIERTO",
+                        "observacion_apertura": "\n".join(filter(None, [observation, operation_detail])),
                         "creado_en": now(), "actualizado_en": now(),
                     })
                     turn_id = row["id"]
@@ -397,7 +495,7 @@ elif role == "ASISTENTE" and page == "Operación":
             if incidents.empty:
                 st.info("Sin incidencias registradas.")
             else:
-                st.dataframe(incidents, width="stretch", hide_index=True)
+                st.dataframe(incident_summary(incidents), width="stretch", hide_index=True)
                 open_incidents = incidents[incidents["estado"] == "ABIERTA"]
                 if not open_incidents.empty:
                     st.subheader("Cerrar incidencia abierta")
@@ -445,7 +543,11 @@ elif role == "ASISTENTE" and page == "Operación":
                             "registrado_por": user_id, "creado_en": now(),
                         })
                         st.rerun()
-            st.dataframe(frame(T["tras"], {"turno_id": turn_id}), width="stretch", hide_index=True)
+            transfers = frame(T["tras"], {"turno_id": turn_id})
+            if transfers.empty:
+                st.info("Sin traslados registrados.")
+            else:
+                st.dataframe(transfer_summary(transfers), width="stretch", hide_index=True)
 
 elif role == "ASISTENTE" and page == "Cerrar turno":
     st.title("Cerrar turno")
@@ -455,9 +557,10 @@ elif role == "ASISTENTE" and page == "Cerrar turno":
     else:
         personal = frame(T["personal"], {"turno_id": turn_id})
         turn = frame(T["turnos"], {"id": turn_id}).iloc[0]
+        result_label = RESULT_LABELS[selected_operation]
         with st.form("close"):
             end = st.time_input("Hora final real", time.fromisoformat(str(turn["hora_programada_fin"])[:5]))
-            washed = st.number_input("Jabas lavadas", 0, 1000000, 0, step=100)
+            result_quantity = st.number_input(result_label, 0, 1000000, 0, step=100)
             observation = st.text_area("Observación de cierre")
             if st.form_submit_button("Enviar cierre", type="primary"):
                 end_dt = datetime.combine(date.fromisoformat(str(turn["fecha"])), end, tzinfo=LIMA)
@@ -478,8 +581,8 @@ elif role == "ASISTENTE" and page == "Cerrar turno":
                         "minutos_refrigerio": break_minutes,
                         "horas_efectivas": effective_hours, "horas_persona": hours_person,
                     }, {"id": str(item["id"])})
-                productivity = washed / total_hours_person if total_hours_person else 0
-                payload = {"turno_id": turn_id, "jabas_lavadas": washed,
+                productivity = result_quantity / total_hours_person if total_hours_person else 0
+                payload = {"turno_id": turn_id, "jabas_lavadas": result_quantity,
                            "horas_persona": total_hours_person, "productividad": productivity,
                            "actualizado_en": now()}
                 if get(T["prod"], {"turno_id": turn_id}):
@@ -491,14 +594,18 @@ elif role == "ASISTENTE" and page == "Cerrar turno":
                                     "observacion_cierre": observation, "cerrado_en": now(), "actualizado_en": now()},
                      {"id": turn_id})
                 audit("turnos", turn_id, "estado", "CONFIRMADO", "CERRADO",
-                      f"Jabas lavadas: {washed}", user_id)
+                      f"{result_label}: {result_quantity}", user_id)
                 st.success("Cierre enviado al supervisor.")
 
 elif role == "SUPERVISOR" and page == "Panel":
-    st.title("Panel supervisor")
-    data = frame(T["turnos"])
-    for column, status in zip(st.columns(4), ["ABIERTO", "CONFIRMADO", "CERRADO", "VALIDADO"]):
-        column.metric(status, int((data["estado"] == status).sum()) if not data.empty else 0)
+    st.title(f"Panel supervisor · {selected_operation}")
+    data = filter_current_operation(frame(T["turnos"]))
+    metric_labels = [("ABIERTO", "Por confirmar"), ("CONFIRMADO", "En ejecución"),
+                     ("CERRADO", "Cierres pendientes"), ("VALIDADO", "Finalizados")]
+    for column, (status, label_text) in zip(st.columns(4), metric_labels):
+        column.metric(label_text, int((data["estado"] == status).sum()) if not data.empty else 0)
+    if not data.empty:
+        st.dataframe(turn_summary(data), width="stretch", hide_index=True)
 
 elif role == "SUPERVISOR" and page == "Confirmar apertura":
     st.title("Confirmar apertura")
@@ -506,7 +613,13 @@ elif role == "SUPERVISOR" and page == "Confirmar apertura":
     if turn_id is None:
         st.info("No hay aperturas pendientes.")
     else:
-        st.dataframe(frame(T["personal"], {"turno_id": turn_id}), width="stretch", hide_index=True)
+        staff = frame(T["personal"], {"turno_id": turn_id})
+        if not staff.empty:
+            staff_view = staff[["labor", "cantidad_personas"]].rename(
+                columns={"labor": "Labor o integrante", "cantidad_personas": "Personal"}
+            )
+            st.dataframe(staff_view, width="stretch", hide_index=True)
+            st.metric("Personal total", int(staff["cantidad_personas"].fillna(0).sum()))
         if st.button("Confirmar inicio", type="primary"):
             edit(T["turnos"], {"estado": "CONFIRMADO", "supervisor_id": user_id,
                                 "hora_real_inicio": now(), "confirmado_en": now(), "actualizado_en": now()},
@@ -519,10 +632,15 @@ elif role == "SUPERVISOR" and page == "Seguimiento":
     st.title("Seguimiento")
     turn_id = choose_turn(["CONFIRMADO", "CERRADO", "VALIDADO"])
     if turn_id is not None:
-        for title, table in [("Incidencias", "inc"), ("Traslados", "tras"), ("Auditoría", "audit")]:
-            st.subheader(title)
-            st.dataframe(frame(T[table], {"turno_id": turn_id}) if table != "audit" else frame(T[table], {"registro_id": turn_id}),
-                         width="stretch", hide_index=True)
+        incidents = frame(T["inc"], {"turno_id": turn_id})
+        transfers = frame(T["tras"], {"turno_id": turn_id})
+        st.subheader("Incidencias")
+        st.dataframe(incident_summary(incidents), width="stretch", hide_index=True) if not incidents.empty else st.info("Sin incidencias.")
+        st.subheader("Traslados")
+        st.dataframe(transfer_summary(transfers), width="stretch", hide_index=True) if not transfers.empty else st.info("Sin traslados.")
+        with st.expander("Ver detalle de auditoría"):
+            audit_data = frame(T["audit"], {"registro_id": turn_id})
+            st.dataframe(audit_data, width="stretch", hide_index=True) if not audit_data.empty else st.info("Sin movimientos de auditoría.")
 
 elif role == "SUPERVISOR" and page == "Validar cierre":
     st.title("Validar cierre")
@@ -533,7 +651,8 @@ elif role == "SUPERVISOR" and page == "Validar cierre":
         production = frame(T["prod"], {"turno_id": turn_id}).iloc[0]
         old = int(production["jabas_lavadas"])
         with st.form("validate"):
-            new = st.number_input("Jabas lavadas", 0, 1000000, old)
+            result_label = RESULT_LABELS[selected_operation]
+            new = st.number_input(result_label, 0, 1000000, old)
             reason = st.text_area("Motivo obligatorio si corrige")
             if st.form_submit_button("Validar", type="primary"):
                 if new != old and not reason.strip():
@@ -544,7 +663,7 @@ elif role == "SUPERVISOR" and page == "Validar cierre":
                         edit(T["prod"], {"jabas_lavadas": new,
                                          "productividad": new / hours_person if hours_person else 0,
                                          "actualizado_en": now()}, {"turno_id": turn_id})
-                        audit("produccion_turno", str(production["id"]), "jabas_lavadas", old, new, reason, user_id)
+                        audit("produccion_turno", str(production["id"]), result_label, old, new, reason, user_id)
                     edit(T["turnos"], {"estado": "VALIDADO", "supervisor_id": user_id,
                                         "validado_en": now(), "actualizado_en": now()}, {"id": turn_id})
                     audit("turnos", turn_id, "estado", "CERRADO", "VALIDADO",
@@ -668,13 +787,31 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
                     st.rerun()
 
 elif role == "JEFATURA":
-    st.title(page)
-    table = {"Panel": "turnos", "Turnos": "turnos", "Incidencias": "inc", "Auditoría": "audit"}[page]
-    data = frame(T[table])
-    if data.empty:
-        st.info("Sin datos.")
+    st.title(f"{page} · {selected_operation}")
+    if page in ["Panel", "Turnos"]:
+        data = filter_current_operation(frame(T["turnos"]))
+        if page == "Panel":
+            metric_labels = [("ABIERTO", "Por confirmar"), ("CONFIRMADO", "En ejecución"),
+                             ("CERRADO", "Cierres pendientes"), ("VALIDADO", "Finalizados")]
+            for column, (status, label_text) in zip(st.columns(4), metric_labels):
+                column.metric(label_text, int((data["estado"] == status).sum()) if not data.empty else 0)
+        if data.empty:
+            st.info("Sin turnos registrados en esta operación.")
+        else:
+            st.dataframe(turn_summary(data), width="stretch", hide_index=True)
+    elif page == "Incidencias":
+        turns = filter_current_operation(frame(T["turnos"]))
+        incidents = frame(T["inc"])
+        if turns.empty or incidents.empty:
+            st.info("Sin incidencias registradas en esta operación.")
+        else:
+            turn_ids = set(turns["id"].astype(str))
+            incidents = incidents[incidents["turno_id"].astype(str).isin(turn_ids)]
+            st.dataframe(incident_summary(incidents), width="stretch", hide_index=True) if not incidents.empty else st.info("Sin incidencias registradas en esta operación.")
     else:
-        st.dataframe(data, width="stretch", hide_index=True)
+        data = frame(T["audit"])
+        st.caption("Detalle técnico reservado para trazabilidad y revisión.")
+        st.dataframe(data, width="stretch", hide_index=True) if not data.empty else st.info("Sin datos de auditoría.")
 
 st.divider()
-st.caption("Piloto Lavado de Jabas · Supabase · Refrigerio automático: 45 min en jornadas mayores a 6 horas")
+st.caption("Control de Operaciones Logísticas · Supabase · Refrigerio automático: 45 min en jornadas mayores a 6 horas")
