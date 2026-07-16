@@ -19,6 +19,15 @@ LABORES = ["Lavado de jabas", "Secado de jabas", "Limpieza de lámina burbupack"
 INCIDENCIAS = ["Falta de agua", "Falla de equipo", "Falta de energía", "Falta de jabas",
                "Falta de personal", "Limpieza del área", "Desperfecto mecánico",
                "Acumulación de jabas", "Otro"]
+OPERACIONES = [
+    ("📋", "Planificación y asignación de recursos logísticos", False),
+    ("🚜", "Solicitud y recepción de unidades de Maquinaria", False),
+    ("🧼", "Lavado de jabas", True),
+    ("📦", "Distribución de jabas", False),
+    ("💡", "Gestión de luminarias y distribución de materiales", False),
+    ("👷", "Distribución de estibadores y operaciones en acopio", False),
+    ("🚚", "Traslado y acarreo de fruta", False),
+]
 LIMA = ZoneInfo("America/Lima")
 
 
@@ -122,8 +131,8 @@ if not st.session_state.get("authenticated"):
     </style>
     """, unsafe_allow_html=True)
     st.title("Control de Operaciones Logísticas")
-    st.subheader("🧼 Lavado de jabas")
-    st.caption("Ingresa con tu cuenta para acceder a la operación asignada.")
+    st.subheader("Ingreso al sistema")
+    st.caption("Identifícate para consultar las operaciones disponibles.")
     with st.form("login"):
         login_user = st.text_input("Usuario", placeholder="Escribe tu usuario")
         login_password = st.text_input("Contraseña", type="password", placeholder="Escribe tu contraseña")
@@ -137,7 +146,6 @@ if not st.session_state.get("authenticated"):
                 st.session_state["authenticated"] = True
                 st.session_state["user_id"] = str(account["id"])
                 st.rerun()
-    st.info("Operación disponible: Lavado de jabas")
     st.stop()
 
 current = users[users["id"].astype(str) == str(st.session_state.get("user_id"))]
@@ -151,11 +159,37 @@ user_id = str(user_row["id"])
 user_name = str(user_row["nombre"])
 role = str(user_row["rol"]).upper()
 
-st.sidebar.title("🧼 Lavado de jabas")
+st.sidebar.title("Operaciones Logísticas")
 st.sidebar.write(f"**{user_name}**")
-st.sidebar.caption(f"{role.title()} · Lavado de jabas")
+st.sidebar.caption(role.title())
 if st.sidebar.button("Cerrar sesión", use_container_width=True):
     st.session_state.clear()
+    st.rerun()
+
+if not st.session_state.get("selected_operation"):
+    st.title("Inicio")
+    st.write(f"Bienvenido, **{user_name}**. Selecciona una operación para continuar.")
+    for row_start in range(0, len(OPERACIONES), 2):
+        columns = st.columns(2)
+        for column, operation in zip(columns, OPERACIONES[row_start:row_start + 2]):
+            icon, name, enabled = operation
+            with column.container(border=True):
+                st.subheader(f"{icon} {name}")
+                if enabled:
+                    st.success("Disponible")
+                    if st.button("Ingresar", key=f"open_{row_start}_{name}",
+                                 type="primary", use_container_width=True):
+                        st.session_state["selected_operation"] = name
+                        st.rerun()
+                else:
+                    st.caption("En preparación")
+                    st.button("Próximamente", key=f"disabled_{row_start}_{name}",
+                              disabled=True, use_container_width=True)
+    st.stop()
+
+st.sidebar.caption(f"Operación: {st.session_state['selected_operation']}")
+if st.sidebar.button("Cambiar operación", use_container_width=True):
+    st.session_state.pop("selected_operation", None)
     st.rerun()
 
 menus = {
