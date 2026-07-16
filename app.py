@@ -266,6 +266,18 @@ if role == "ASISTENTE" and page == "Inicio":
 
 elif role == "ASISTENTE" and page == "Abrir turno":
     st.title("Abrir turno")
+    opening_result_key = f"opening_result_{user_id}"
+    if st.session_state.get(opening_result_key):
+        result = st.session_state[opening_result_key]
+        st.success("Apertura enviada correctamente al supervisor.")
+        st.info(
+            f"Fecha: {result['fecha']} · Turno: {result['turno']} · Estado: {result['estado']}"
+        )
+        st.warning("No es necesario volver a enviarla. Espera la confirmación del supervisor.")
+        if st.button("Registrar una apertura de otra fecha", use_container_width=True):
+            st.session_state.pop(opening_result_key, None)
+            st.rerun()
+        st.stop()
     with st.form("open"):
         c1, c2 = st.columns(2)
         day = c1.date_input("Fecha", date.today())
@@ -278,23 +290,35 @@ elif role == "ASISTENTE" and page == "Abrir turno":
         observation = st.text_area("Observación")
         if st.form_submit_button("Enviar al supervisor", type="primary", use_container_width=True):
             try:
-                row = add(T["turnos"], {
-                    "fecha": str(day), "tipo_turno": "DIA" if shift == "Día" else "NOCHE",
-                    "hora_programada_inicio": start.strftime("%H:%M"),
-                    "hora_programada_fin": end.strftime("%H:%M"),
-                    "asistente_id": user_id, "responsable_operacion": user_name,
-                    "estado": "ABIERTO", "observacion_apertura": observation,
-                    "creado_en": now(), "actualizado_en": now(),
+                shift_code = "DIA" if shift == "Día" else "NOCHE"
+                existing = get(T["turnos"], {
+                    "fecha": str(day), "tipo_turno": shift_code, "asistente_id": user_id,
                 })
-                turn_id = row["id"]
-                add(T["personal"], [{
-                    "turno_id": turn_id, "labor": labor, "cantidad_personas": quantity,
-                    "hora_inicio": timestamp(day, start), "minutos_refrigerio": 45,
-                    "creado_en": now(),
-                } for labor, quantity in zip(LABORES, quantities)])
-                audit("turnos", turn_id, "estado", None, "ABIERTO",
-                      f"Personal inicial: {sum(quantities)}", user_id)
-                st.success(f"Turno creado en Supabase: {turn_id}")
+                if existing:
+                    st.session_state[opening_result_key] = {
+                        "fecha": str(day), "turno": shift, "estado": existing[0]["estado"],
+                    }
+                else:
+                    row = add(T["turnos"], {
+                        "fecha": str(day), "tipo_turno": shift_code,
+                        "hora_programada_inicio": start.strftime("%H:%M"),
+                        "hora_programada_fin": end.strftime("%H:%M"),
+                        "asistente_id": user_id, "responsable_operacion": user_name,
+                        "estado": "ABIERTO", "observacion_apertura": observation,
+                        "creado_en": now(), "actualizado_en": now(),
+                    })
+                    turn_id = row["id"]
+                    add(T["personal"], [{
+                        "turno_id": turn_id, "labor": labor, "cantidad_personas": quantity,
+                        "hora_inicio": timestamp(day, start), "minutos_refrigerio": 45,
+                        "creado_en": now(),
+                    } for labor, quantity in zip(LABORES, quantities)])
+                    audit("turnos", turn_id, "estado", None, "ABIERTO",
+                          f"Personal inicial: {sum(quantities)}", user_id)
+                    st.session_state[opening_result_key] = {
+                        "fecha": str(day), "turno": shift, "estado": "ABIERTO",
+                    }
+                st.rerun()
             except Exception as e:
                 st.error(f"No se pudo crear el turno: {getattr(e, 'message', None) or str(e)}")
 
