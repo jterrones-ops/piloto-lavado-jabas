@@ -380,7 +380,8 @@ def turn_label(row):
     assistant = user_by_id.get(str(row["asistente_id"]), "Sin asignar")
     shift = shift_label_for_row(row)
     status = STATUS_LABELS.get(row["estado"], row["estado"])
-    return f"{row['fecha']} | {shift} | {assistant} | {status}"
+    context = turn_acopio(str(row["id"])) if selected_operation == "Acopios" else selected_operation
+    return f"{context or selected_operation} | {row['fecha']} | {shift} | {assistant} | {status}"
 
 
 def filter_current_operation(data):
@@ -509,7 +510,11 @@ def choose_turn(statuses, assistant_id=None):
     if data.empty:
         return None
     mapping = {turn_label(row): str(row["id"]) for _, row in data.iterrows()}
-    return mapping[st.selectbox("Turno", list(mapping))]
+    if len(mapping) == 1:
+        label, turn_id = next(iter(mapping.items()))
+        st.info(f"Operación seleccionada: {label}")
+        return turn_id
+    return mapping[st.selectbox("Operación aprobada", list(mapping))]
 
 
 if role == "ASISTENTE" and page == "Inicio":
@@ -528,7 +533,7 @@ elif role == "ASISTENTE" and page == "Abrir turno":
             f"Estado: {STATUS_LABELS.get(result['estado'], result['estado'])}"
         )
         st.warning("No es necesario volver a enviarla. Espera la confirmación del supervisor.")
-        if st.button("Registrar una apertura de otra fecha", use_container_width=True):
+        if st.button("Registrar otra apertura", use_container_width=True):
             st.session_state.pop(opening_result_key, None)
             st.rerun()
         st.stop()
@@ -603,6 +608,12 @@ elif role == "ASISTENTE" and page == "Abrir turno":
                 if not existing_df.empty:
                     existing_df = existing_df[
                         existing_df["hora_programada_inicio"].astype(str).str[:5] == selected_schedule["start"]
+                    ]
+                if selected_operation == "Acopios" and not existing_df.empty:
+                    existing_df = existing_df[
+                        existing_df["observacion_apertura"].fillna("").astype(str).str.contains(
+                            f"ubicación={selected_acopio},", regex=False
+                        )
                     ]
                 existing = existing_df.to_dict("records")
                 if existing:
