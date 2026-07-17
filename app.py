@@ -510,6 +510,17 @@ def choose_turn(statuses, assistant_id=None):
     if data.empty:
         return None
     mapping = {turn_label(row): str(row["id"]) for _, row in data.iterrows()}
+    if assistant_id:
+        preferred_key = f"active_turn_{assistant_id}_{selected_operation}"
+        preferred_id = str(st.session_state.get(preferred_key, ""))
+        selected_row = data[data["id"].astype(str) == preferred_id]
+        if selected_row.empty:
+            selected_row = data.head(1)
+        selected_id = str(selected_row.iloc[0]["id"])
+        selected_label = turn_label(selected_row.iloc[0])
+        st.info(f"Operación actual: {selected_label}")
+        st.session_state[preferred_key] = selected_id
+        return selected_id
     if len(mapping) == 1:
         label, turn_id = next(iter(mapping.items()))
         st.info(f"Operación seleccionada: {label}")
@@ -617,6 +628,7 @@ elif role == "ASISTENTE" and page == "Abrir turno":
                     ]
                 existing = existing_df.to_dict("records")
                 if existing:
+                    st.session_state[f"active_turn_{user_id}_{selected_operation}"] = str(existing[0]["id"])
                     st.session_state[opening_result_key] = {
                         "fecha": str(day), "turno": shift, "estado": existing[0]["estado"],
                     }
@@ -631,6 +643,7 @@ elif role == "ASISTENTE" and page == "Abrir turno":
                         "creado_en": now(), "actualizado_en": now(),
                     })
                     turn_id = row["id"]
+                    st.session_state[f"active_turn_{user_id}_{selected_operation}"] = str(turn_id)
                     add(T["personal"], [{
                         "turno_id": turn_id, "labor": labor, "cantidad_personas": quantity,
                         "hora_inicio": timestamp(day, start), "minutos_refrigerio": 45,
