@@ -28,7 +28,7 @@ INCIDENCIAS = ["Falta de agua", "Falla de equipo", "Falta de energía", "Falta d
                "Acumulación de jabas", "Otro"]
 OPERACIONES = [
     {
-        "icon": "🧼", "name": "Lavado de jabas", "enabled": True,
+        "icon": "", "name": "Lavado de jabas", "enabled": True,
         "responsables": ["Asistente · Rafael Zapata"],
         "labores": ["Lavado", "Secado", "Limpieza de lámina burbupack"],
     },
@@ -1115,7 +1115,7 @@ elif role == "JEFATURA":
     else:
         data = frame(T["audit"])
         st.caption("Detalle técnico reservado para trazabilidad y revisión.")
-        st.dataframe(data, width="stretch", hide_index=True) if not data.empty else st.info("Sin datos de auditoría.")
+        st.dataframe(data, width="stretch", hide_index=True) if not data.empty else st.info("Sin datos para reporte.")
 
 st.divider()
-st.caption("Control de Operaciones Logísticas · Supabase · Refrigerio automático: 45 min en jornadas mayores a 6 horas")
+st.caption("Control de Operaciones Logísticas ")
