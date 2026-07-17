@@ -374,7 +374,6 @@ page = st.selectbox(
     key=f"main_navigation_{role}",
     help="Selecciona la sección que deseas abrir.",
 )
-st.sidebar.caption("Base central: Supabase")
 
 
 def turn_label(row):
