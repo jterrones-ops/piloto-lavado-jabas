@@ -51,9 +51,7 @@ OPERACIONES = [
     {
         "icon": "🏭", "name": "Acopios", "enabled": True,
         "responsables": ["Supervisor · Andrés Villegas"],
-        "labores": ["Manual · Asistente (acopiador)", "Manual · Estibadores",
-                    "Mecanizado · Asistente (acopiador)", "Mecanizado · Estibadores",
-                    "Mecanizado · Montacarguistas"],
+        "labores": ["Asistente (acopiador)", "Estibadores", "Montacarguistas"],
     },
 ]
 SHIFT_SCHEDULES = {
@@ -554,10 +552,9 @@ elif role == "ASISTENTE" and page == "Abrir turno":
             c1, c2 = st.columns(2)
             c1.metric("Tipo", acopio_data["tipo"])
             c2.metric("Capacidad", f"{acopio_data['capacidad']:,} jabas")
-            prefix = acopio_data["tipo"]
-            opening_labors = [f"{prefix} · Asistente (acopiador)", f"{prefix} · Estibadores"]
-            if prefix == "Mecanizado":
-                opening_labors.append("Mecanizado · Montacarguistas")
+            opening_labors = ["Asistente (acopiador)", "Estibadores"]
+            if acopio_data["tipo"] == "Mecanizado":
+                opening_labors.append("Montacarguistas")
             operation_detail = (
                 f"ACOPIO: ubicación={selected_acopio}, tipo={acopio_data['tipo']}, "
                 f"capacidad={acopio_data['capacidad']} jabas."
