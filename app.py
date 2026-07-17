@@ -2,6 +2,8 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import hashlib
 import hmac
+import json
+from uuid import uuid4
 
 import bcrypt
 import pandas as pd
@@ -80,6 +82,24 @@ SHIFT_SCHEDULES = {
         {"label": "Noche", "code": "NOCHE", "start": "16:00", "end": "00:45"},
     ],
 }
+ACOPIOS = {
+    "G3-G4": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "F1-F2": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "F4-F5": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "E4-E5": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "D2-D1": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "D4-D5": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "B2-B3": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "G14-H14": {"capacidad": 15000, "tipo": "Manual"},
+    "E14-F13": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "D15": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "B12": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "PK2": {"capacidad": 20000, "tipo": "Mecanizado"},
+    "B7-B6": {"capacidad": 15000, "tipo": "Manual"},
+    "C14-C15": {"capacidad": 15000, "tipo": "Manual"},
+    "A13-A12": {"capacidad": 15000, "tipo": "Manual"},
+    "D12-D13": {"capacidad": 15000, "tipo": "Manual"},
+}
 LIMA = ZoneInfo("America/Lima")
 
 
@@ -135,6 +155,52 @@ def edit(table, data, filters):
     for key, value in filters.items():
         query = query.eq(key, value)
     return query.execute().data or []
+
+
+def acopio_trips(turn_id):
+    prefix = f"viaje_acopio:{turn_id}:"
+    trips = []
+    for row in get(T["config"], order=None):
+        key = str(row.get("clave", ""))
+        if not key.startswith(prefix):
+            continue
+        try:
+            trip = json.loads(row.get("valor") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        trip["_key"] = key
+        trips.append(trip)
+    return sorted(trips, key=lambda item: item.get("salida", ""), reverse=True)
+
+
+def save_acopio_trip(turn_id, trip):
+    key = f"viaje_acopio:{turn_id}:{uuid4()}"
+    add(T["config"], {
+        "clave": key,
+        "valor": json.dumps(trip, ensure_ascii=False),
+        "descripcion": "Registro piloto de viaje desde punto de acopio",
+        "actualizado_en": now(),
+    })
+    return key
+
+
+def update_acopio_trip(key, trip):
+    edit(T["config"], {
+        "valor": json.dumps(trip, ensure_ascii=False),
+        "actualizado_en": now(),
+    }, {"clave": key})
+
+
+def turn_acopio(turn_id):
+    turns = frame(T["turnos"], {"id": turn_id})
+    if turns.empty:
+        return None
+    observation = str(turns.iloc[0].get("observacion_apertura") or "")
+    marker = "ACOPIO: ubicación="
+    if marker not in observation:
+        return None
+    location = observation.split(marker, 1)[1].split(",", 1)[0].strip()
+    return location if location in ACOPIOS else None
 
 
 def assigned_operation(account_id):
@@ -479,13 +545,29 @@ elif role == "ASISTENTE" and page == "Abrir turno":
         c1, c2 = st.columns(2)
         start = c1.time_input("Inicio", time.fromisoformat(selected_schedule["start"]), disabled=True)
         end = c2.time_input("Fin programado", time.fromisoformat(selected_schedule["end"]), disabled=True)
+        opening_labors = LABORES
+        operation_detail = ""
+        if selected_operation == "Acopios":
+            st.markdown("#### Punto de acopio")
+            selected_acopio = st.selectbox("Ubicación", list(ACOPIOS))
+            acopio_data = ACOPIOS[selected_acopio]
+            c1, c2 = st.columns(2)
+            c1.metric("Tipo", acopio_data["tipo"])
+            c2.metric("Capacidad", f"{acopio_data['capacidad']:,} jabas")
+            prefix = acopio_data["tipo"]
+            opening_labors = [f"{prefix} · Asistente (acopiador)", f"{prefix} · Estibadores"]
+            if prefix == "Mecanizado":
+                opening_labors.append("Mecanizado · Montacarguistas")
+            operation_detail = (
+                f"ACOPIO: ubicación={selected_acopio}, tipo={acopio_data['tipo']}, "
+                f"capacidad={acopio_data['capacidad']} jabas."
+            )
         st.markdown("#### Personal por labor o integrante")
-        default_quantities = [10, 4, 2] if selected_operation == "Lavado de jabas" else [0] * len(LABORES)
+        default_quantities = [10, 4, 2] if selected_operation == "Lavado de jabas" else [0] * len(opening_labors)
         quantities = [
             st.number_input(labor, 0, 200, value)
-            for labor, value in zip(LABORES, default_quantities)
+            for labor, value in zip(opening_labors, default_quantities)
         ]
-        operation_detail = ""
         if selected_operation == "Acarreo de fruta":
             st.markdown("#### Equipos — Lote → Acopio")
             c1, c2, c3 = st.columns(3)
@@ -546,7 +628,7 @@ elif role == "ASISTENTE" and page == "Abrir turno":
                         "turno_id": turn_id, "labor": labor, "cantidad_personas": quantity,
                         "hora_inicio": timestamp(day, start), "minutos_refrigerio": 45,
                         "creado_en": now(),
-                    } for labor, quantity in zip(LABORES, quantities)])
+                    } for labor, quantity in zip(opening_labors, quantities)])
                     audit("turnos", turn_id, "estado", None, "ABIERTO",
                           f"Personal inicial: {sum(quantities)}", user_id)
                     st.session_state[opening_result_key] = {
@@ -562,7 +644,11 @@ elif role == "ASISTENTE" and page == "Operación":
     if turn_id is None:
         st.info("No tienes turnos en ejecución.")
     else:
-        incident_tab, transfer_tab = st.tabs(["Incidencias", "Traslado interno"])
+        tab_names = ["Incidencias", "Traslado interno"]
+        if selected_operation == "Acopios":
+            tab_names.append("Viajes")
+        operation_tabs = st.tabs(tab_names)
+        incident_tab, transfer_tab = operation_tabs[:2]
         with incident_tab:
             with st.form("inc"):
                 incident_type = st.selectbox("Tipo", INCIDENCIAS)
@@ -646,6 +732,133 @@ elif role == "ASISTENTE" and page == "Operación":
                 st.info("Sin traslados registrados.")
             else:
                 st.dataframe(transfer_summary(transfers), width="stretch", hide_index=True)
+
+        if selected_operation == "Acopios":
+            trip_tab = operation_tabs[2]
+            with trip_tab:
+                location = turn_acopio(turn_id)
+                if location is None:
+                    st.warning("Este turno no tiene un punto de acopio asociado. Selecciónalo para la prueba.")
+                    location = st.selectbox("Punto de acopio", list(ACOPIOS), key="trip_fallback_acopio")
+                acopio_data = ACOPIOS[location]
+                st.subheader(location)
+                c1, c2 = st.columns(2)
+                c1.metric("Tipo", acopio_data["tipo"])
+                c2.metric("Capacidad", f"{acopio_data['capacidad']:,} jabas")
+
+                trips = acopio_trips(turn_id)
+                total_jabas = sum(int(item.get("total_jabas", 0) or 0) for item in trips)
+                in_transit = [item for item in trips if item.get("estado") == "EN_TRANSITO"]
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Viajes", len(trips))
+                c2.metric("Jabas", f"{total_jabas:,}")
+                c3.metric("En tránsito", len(in_transit))
+
+                st.markdown("#### Registrar salida")
+                with st.form("register_acopio_trip", clear_on_submit=True):
+                    c1, c2 = st.columns(2)
+                    unit = c1.text_input("Unidad", placeholder="Código o placa")
+                    departure_time = c2.time_input(
+                        "Hora de salida", datetime.now(LIMA).time().replace(second=0, microsecond=0)
+                    )
+                    st.caption("Agrega una fila por cada variedad transportada.")
+                    varieties_editor = st.data_editor(
+                        pd.DataFrame([{"Variedad": "", "Jabas": 0}]),
+                        num_rows="dynamic",
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "Variedad": st.column_config.TextColumn("Variedad", required=True),
+                            "Jabas": st.column_config.NumberColumn("Jabas", min_value=0, step=1, required=True),
+                        },
+                        key="trip_varieties_editor",
+                    )
+                    register_trip = st.form_submit_button(
+                        "Registrar salida", type="primary", use_container_width=True
+                    )
+                    if register_trip:
+                        details = []
+                        for _, detail in varieties_editor.iterrows():
+                            variety = str(detail.get("Variedad") or "").strip()
+                            amount = detail.get("Jabas", 0)
+                            amount = 0 if pd.isna(amount) else int(amount)
+                            if variety and amount > 0:
+                                details.append({"variedad": variety, "jabas": amount})
+                        normalized_unit = unit.strip().upper()
+                        duplicate_unit = any(
+                            str(item.get("unidad", "")).upper() == normalized_unit for item in in_transit
+                        )
+                        if not normalized_unit:
+                            st.error("Ingresa la unidad que realiza el viaje.")
+                        elif duplicate_unit:
+                            st.error("Esa unidad ya tiene un viaje en tránsito.")
+                        elif not details:
+                            st.error("Agrega al menos una variedad con cantidad de jabas.")
+                        else:
+                            turn = frame(T["turnos"], {"id": turn_id}).iloc[0]
+                            turn_day = date.fromisoformat(str(turn["fecha"]))
+                            departure = datetime.combine(turn_day, departure_time, tzinfo=LIMA)
+                            programmed_start = time.fromisoformat(str(turn["hora_programada_inicio"])[:5])
+                            programmed_end = time.fromisoformat(str(turn["hora_programada_fin"])[:5])
+                            if programmed_end <= programmed_start and departure_time < programmed_start:
+                                departure += timedelta(days=1)
+                            next_number = max([int(item.get("numero", 0) or 0) for item in trips] + [0]) + 1
+                            trip = {
+                                "numero": next_number, "acopio": location,
+                                "tipo_acopio": acopio_data["tipo"], "capacidad": acopio_data["capacidad"],
+                                "unidad": normalized_unit,
+                                "salida": departure.isoformat(timespec="seconds"),
+                                "llegada": None, "duracion_minutos": None,
+                                "variedades": details,
+                                "total_jabas": sum(item["jabas"] for item in details),
+                                "estado": "EN_TRANSITO", "registrado_por": user_id,
+                            }
+                            save_acopio_trip(turn_id, trip)
+                            audit("viajes_acopio", turn_id, "salida", None, next_number,
+                                  f"Unidad {normalized_unit} · {location}", user_id)
+                            st.rerun()
+
+                if in_transit:
+                    st.markdown("#### Registrar llegada")
+                    trip_options = {
+                        f"Viaje {item['numero']} · {item['unidad']} · salida {display_clock(item['salida'])}": item
+                        for item in in_transit
+                    }
+                    selected_trip_label = st.selectbox("Viaje en tránsito", list(trip_options))
+                    arrival_time = st.time_input(
+                        "Hora de llegada", datetime.now(LIMA).time().replace(second=0, microsecond=0),
+                        key="trip_arrival_time",
+                    )
+                    if st.button("Registrar llegada", type="primary", use_container_width=True):
+                        selected_trip = dict(trip_options[selected_trip_label])
+                        key = selected_trip.pop("_key")
+                        departure = pd.to_datetime(selected_trip["salida"]).to_pydatetime()
+                        arrival = datetime.combine(departure.date(), arrival_time, tzinfo=LIMA)
+                        if arrival < departure:
+                            arrival += timedelta(days=1)
+                        selected_trip["llegada"] = arrival.isoformat(timespec="seconds")
+                        selected_trip["duracion_minutos"] = minutes_between(departure, arrival)
+                        selected_trip["estado"] = "FINALIZADO"
+                        update_acopio_trip(key, selected_trip)
+                        audit("viajes_acopio", turn_id, "llegada", None, selected_trip["numero"],
+                              f"Duración: {selected_trip['duracion_minutos']} minutos", user_id)
+                        st.rerun()
+
+                if trips:
+                    rows = []
+                    for item in trips:
+                        varieties = ", ".join(
+                            f"{detail['variedad']}: {detail['jabas']}" for detail in item.get("variedades", [])
+                        )
+                        rows.append({
+                            "Viaje": item.get("numero"), "Unidad": item.get("unidad"),
+                            "Salida": display_clock(item.get("salida")),
+                            "Llegada": display_clock(item.get("llegada")),
+                            "Duración (min)": item.get("duracion_minutos") or "Pendiente",
+                            "Jabas": item.get("total_jabas", 0), "Variedades": varieties,
+                            "Estado": "En tránsito" if item.get("estado") == "EN_TRANSITO" else "Finalizado",
+                        })
+                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 elif role == "ASISTENTE" and page == "Cerrar turno":
     st.title("Cerrar turno")
