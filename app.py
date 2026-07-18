@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 import hashlib
 import hmac
 import json
+from time import sleep
 from uuid import uuid4
 
 import bcrypt
@@ -126,17 +127,22 @@ def timestamp(day, clock):
 
 
 def get(table, filters=None, order="creado_en"):
-    try:
-        query = sb.table(table).select("*")
-        for key, value in (filters or {}).items():
-            query = query.eq(key, value)
-        if order:
-            query = query.order(order, desc=True)
-        return query.execute().data or []
-    except Exception as e:
-        message = getattr(e, "message", None) or str(e)
-        st.error(f"Error de Supabase al consultar '{table}': {message}")
-        return []
+    for attempt in range(3):
+        try:
+            query = sb.table(table).select("*")
+            for key, value in (filters or {}).items():
+                query = query.eq(key, value)
+            if order:
+                query = query.order(order, desc=True)
+            return query.execute().data or []
+        except Exception:
+            if attempt < 2:
+                sleep(0.6 * (attempt + 1))
+    st.error("No se pudo consultar la información en este momento.")
+    st.info("Espera unos segundos y presiona Reintentar. Los registros guardados no se han eliminado.")
+    if st.button("Reintentar conexión", use_container_width=True, key=f"retry_{table}"):
+        st.rerun()
+    st.stop()
 
 
 def frame(table, filters=None, order="creado_en"):
@@ -144,15 +150,25 @@ def frame(table, filters=None, order="creado_en"):
 
 
 def add(table, data):
-    rows = sb.table(table).insert(data).execute().data or []
-    return rows[0] if rows else None
+    try:
+        rows = sb.table(table).insert(data).execute().data or []
+        return rows[0] if rows else None
+    except Exception:
+        st.error("No se pudo confirmar el registro.")
+        st.info("Verifica si el registro aparece antes de volver a enviarlo, para evitar duplicados.")
+        st.stop()
 
 
 def edit(table, data, filters):
-    query = sb.table(table).update(data)
-    for key, value in filters.items():
-        query = query.eq(key, value)
-    return query.execute().data or []
+    try:
+        query = sb.table(table).update(data)
+        for key, value in filters.items():
+            query = query.eq(key, value)
+        return query.execute().data or []
+    except Exception:
+        st.error("No se pudo confirmar la actualización.")
+        st.info("El sistema no continuará hasta recuperar la conexión. Intenta nuevamente en unos segundos.")
+        st.stop()
 
 
 def acopio_trips(turn_id):
