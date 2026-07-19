@@ -18,3 +18,5 @@ jobs:
           python-version: "3.12"
       - name: Verificar sintaxis
         run: python -m py_compile app.py
+      - name: Ejecutar 5,000 flujos aislados
+        run: python tests/stress_test.py
