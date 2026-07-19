@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from time import perf_counter
@@ -148,7 +149,7 @@ def run_flow(store: Store, operation: str, sequence: int, event_counts: Counter)
         if operation == "Acopios":
             departure = started + timedelta(minutes=60)
             arrival = departure + timedelta(minutes=25 + sequence % 60)
-            varieties = [{"name": "Variedad A", "crates": 500}, {"name": "Variedad B", "crates": 300}]
+            varieties = [{"name": "Variedad A", "crates": 2500}, {"name": "Variedad B", "crates": 1500}]
             trip = {
                 "unit": f"UNIT-{sequence % 200:03d}",
                 "departure": departure,
@@ -157,7 +158,7 @@ def run_flow(store: Store, operation: str, sequence: int, event_counts: Counter)
                 "varieties": varieties,
                 "total_crates": sum(item["crates"] for item in varieties),
             }
-            if trip["total_crates"] != 800:
+            if trip["total_crates"] != 4000:
                 errors.append("Total de jabas por variedad incorrecto")
             if trip["minutes"] <= 0:
                 errors.append("Duración de viaje no positiva")
@@ -180,22 +181,38 @@ def run_flow(store: Store, operation: str, sequence: int, event_counts: Counter)
     return errors
 
 
-def main() -> None:
+def run_operation(operation: str) -> tuple[str, Store, Counter, list[str]]:
     store = Store()
     event_counts: Counter = Counter()
-    failures: dict[str, list[str]] = {operation: [] for operation in OPERATIONS}
-    started_at = perf_counter()
+    failures: list[str] = []
+    for sequence in range(1000):
+        errors = run_flow(store, operation, sequence, event_counts)
+        failures.extend(f"Flujo {sequence + 1}: {error}" for error in errors)
+    return operation, store, event_counts, failures
 
-    for operation in OPERATIONS:
-        for sequence in range(1000):
-            errors = run_flow(store, operation, sequence, event_counts)
-            failures[operation].extend(f"Flujo {sequence + 1}: {error}" for error in errors)
+
+def main() -> None:
+    started_at = perf_counter()
+    with ThreadPoolExecutor(max_workers=len(OPERATIONS)) as executor:
+        results = list(executor.map(run_operation, OPERATIONS))
+
+    stores = {operation: store for operation, store, _, _ in results}
+    failures = {operation: errors for operation, _, _, errors in results}
+    event_counts: Counter = Counter()
+    for _, _, counts, _ in results:
+        event_counts.update(counts)
 
     elapsed = perf_counter() - started_at
     total_failures = sum(len(items) for items in failures.values())
     print("PRUEBA DE CARGA AISLADA")
     print(f"Flujos ejecutados: {len(OPERATIONS) * 1000}")
-    print(f"Turnos almacenados: {len(store.turns)}")
+    print(f"Turnos almacenados: {sum(len(store.turns) for store in stores.values())}")
+    total_crates = sum(
+        trip["total_crates"]
+        for turn in stores["Acopios"].turns.values()
+        for trip in turn.trips
+    )
+    print(f"Jabas trasladadas en 90 días: {total_crates:,}")
     print(f"Eventos procesados: {sum(event_counts.values())}")
     print(f"Tiempo total: {elapsed:.4f} s")
     print(f"Errores: {total_failures}")
@@ -208,6 +225,9 @@ def main() -> None:
     print("EVENTOS")
     for event, count in sorted(event_counts.items()):
         print(f"{event}: {count}")
+
+    if total_crates != 4_000_000:
+        raise SystemExit(f"Total de jabas incorrecto: {total_crates}")
 
     if total_failures:
         raise SystemExit(1)
