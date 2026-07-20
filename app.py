@@ -335,31 +335,20 @@ if role in ("ASISTENTE", "SUPERVISOR") and not global_operation_access:
     st.session_state["selected_operation"] = user_operation
 
 if not st.session_state.get("selected_operation"):
-    st.title("Inicio")
-    st.write(f"Bienvenido, **{user_name}**. Selecciona una operación para continuar.")
-    for row_start in range(0, len(OPERACIONES), 2):
-        columns = st.columns(2)
-        for column, operation in zip(columns, OPERACIONES[row_start:row_start + 2]):
-            icon = operation["icon"]
-            name = operation["name"]
-            enabled = operation["enabled"]
-            with column.container(border=True):
-                st.subheader(f"{icon} {name}")
-                for responsible in operation["responsables"]:
-                    st.caption(responsible)
-                st.markdown("**Labores**")
-                for task in operation["labores"]:
-                    st.markdown(f"- {task}")
-                if enabled:
-                    st.success("Disponible")
-                    if st.button("Ingresar", key=f"open_{row_start}_{name}",
-                                 type="primary", use_container_width=True):
-                        st.session_state["selected_operation"] = name
-                        st.rerun()
-                else:
-                    st.caption("En preparación")
-                    st.button("Próximamente", key=f"disabled_{row_start}_{name}",
-                              disabled=True, use_container_width=True)
+    st.title("Operaciones")
+    st.caption("Selecciona la operación que deseas revisar.")
+    available_operations = [operation for operation in OPERACIONES if operation["enabled"]]
+    columns = st.columns(3)
+    for index, operation in enumerate(available_operations):
+        name = operation["name"]
+        icon = operation["icon"]
+        with columns[index % 3]:
+            if st.button(
+                f"{icon} {name}", key=f"select_operation_{index}",
+                use_container_width=True, type="primary",
+            ):
+                st.session_state["selected_operation"] = name
+                st.rerun()
     st.stop()
 
 st.sidebar.caption(f"Operación: {st.session_state['selected_operation']}")
@@ -384,20 +373,42 @@ if account_role == "JEFATURA":
     if role != "JEFATURA":
         st.sidebar.info(f"Modo de pruebas: {selected_mode}")
 
-menus = {
-    "ASISTENTE": ["Inicio", "Abrir turno", "Operación", "Cerrar turno"],
-    "SUPERVISOR": ["Panel", "Confirmar apertura", "Seguimiento", "Validar cierre"],
-    "JEFATURA": ["Panel", "Turnos", "Incidencias", "Auditoría", "Usuarios y accesos"],
+sections = {
+    "ASISTENTE": ["Inicio", "Planificación", "Operaciones", "Reportes"],
+    "SUPERVISOR": ["Dashboard", "Planificación", "Operaciones", "Reportes"],
+    "JEFATURA": ["Dashboard", "Planificación", "Reportes", "Administración"],
 }
-if role not in menus:
+if role not in sections:
     st.error("El rol de este usuario no está configurado correctamente.")
     st.stop()
-page = st.selectbox(
-    "Ir a",
-    menus[role],
+
+section = st.sidebar.radio(
+    "Menú",
+    sections[role],
     key=f"main_navigation_{role}",
-    help="Selecciona la sección que deseas abrir.",
 )
+page = section
+
+if role == "ASISTENTE" and section == "Operaciones":
+    page = st.radio(
+        "Acción", ["Abrir turno", "Operación", "Cerrar turno"],
+        horizontal=True, key="assistant_operation_action",
+    )
+elif role == "SUPERVISOR":
+    if section == "Dashboard":
+        page = "Panel"
+    elif section == "Operaciones":
+        page = st.radio(
+            "Acción", ["Confirmar apertura", "Seguimiento", "Validar cierre"],
+            horizontal=True, key="supervisor_operation_action",
+        )
+elif role == "JEFATURA":
+    page = {
+        "Dashboard": "Panel",
+        "Planificación": "Planificación",
+        "Reportes": "Reportes",
+        "Administración": "Usuarios y accesos",
+    }[section]
 
 
 def turn_label(row):
@@ -552,8 +563,84 @@ def choose_turn(statuses, assistant_id=None):
     return mapping[st.selectbox("Operación aprobada", list(mapping))]
 
 
-if role == "ASISTENTE" and page == "Inicio":
-    st.title(selected_operation)
+def render_module_cards(current_role):
+    if current_role == "JEFATURA":
+        items = [
+            ("Planificación", "Programa recursos, turnos y responsables."),
+            ("Reportes", "Analiza resultados, incidencias y cumplimiento."),
+            ("Administración", "Gestiona usuarios, accesos y configuraciones."),
+        ]
+    else:
+        items = [
+            ("Planificación", "Consulta lo programado para la jornada."),
+            ("Operaciones", "Registra y controla la ejecución del turno."),
+            ("Reportes", "Revisa resultados e incidencias."),
+        ]
+    for column, (title, description) in zip(st.columns(3), items):
+        with column.container(border=True):
+            st.subheader(title)
+            st.caption(description)
+
+
+def render_planning_view():
+    st.title(f"Planificación · {selected_operation}")
+    st.caption("Vista de la programación de turnos y recursos.")
+    schedules = pd.DataFrame([
+        {"Turno": item["label"], "Inicio": item["start"], "Fin": item["end"]}
+        for item in SHIFT_SCHEDULES[selected_operation]
+    ])
+    st.dataframe(schedules, width="stretch", hide_index=True)
+    if role == "ASISTENTE":
+        planned = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
+    else:
+        planned = filter_current_operation(frame(T["turnos"]))
+    planned = today_turns(planned)
+    st.metric("Turnos programados para hoy", len(planned))
+    if role == "ASISTENTE":
+        st.info("El asistente consulta la planificación. La modificación corresponde al supervisor o Jefatura.")
+    elif role == "SUPERVISOR":
+        st.info("El supervisor revisa la planificación y valida los recursos de su operación.")
+    else:
+        st.info("Jefatura consolida la planificación general y las asignaciones.")
+
+
+def render_reports_view():
+    st.title(f"Reportes · {selected_operation}")
+    if role == "ASISTENTE":
+        turns = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
+    else:
+        turns = filter_current_operation(frame(T["turnos"]))
+    daily_turns = today_turns(turns)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Turnos del día", len(daily_turns))
+    c2.metric(
+        "Finalizados",
+        int((daily_turns["estado"] == "VALIDADO").sum()) if not daily_turns.empty else 0,
+    )
+    turn_ids = set(daily_turns["id"].astype(str)) if not daily_turns.empty else set()
+    incidents = frame(T["inc"])
+    if not incidents.empty and turn_ids:
+        incidents = incidents[incidents["turno_id"].astype(str).isin(turn_ids)]
+    else:
+        incidents = pd.DataFrame()
+    c3.metric("Incidencias", len(incidents))
+    render_daily_turn_table(daily_turns, f"reports_daily_{role}_{selected_operation}")
+    if not incidents.empty:
+        with st.expander("Ver incidencias del día"):
+            st.dataframe(incident_summary(incidents), width="stretch", hide_index=True)
+
+
+if role == "ASISTENTE" and page == "Planificación":
+    render_planning_view()
+
+elif role == "ASISTENTE" and page == "Reportes":
+    render_reports_view()
+
+elif role == "ASISTENTE" and page == "Inicio":
+    st.title("Inicio")
+    st.caption(f"Operación seleccionada: {selected_operation}")
+    render_module_cards(role)
+    st.subheader("Resumen de hoy")
     data = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
     render_daily_turn_table(data, "assistant_daily_shift")
 
@@ -952,8 +1039,16 @@ elif role == "ASISTENTE" and page == "Cerrar turno":
                       f"{result_label}: {result_quantity}", user_id)
                 st.success("Cierre enviado al supervisor.")
 
+elif role == "SUPERVISOR" and page == "Planificación":
+    render_planning_view()
+
+elif role == "SUPERVISOR" and page == "Reportes":
+    render_reports_view()
+
 elif role == "SUPERVISOR" and page == "Panel":
-    st.title(f"Panel supervisor · {selected_operation}")
+    st.title(f"Dashboard · {selected_operation}")
+    render_module_cards(role)
+    st.subheader("Estado de hoy")
     data = today_turns(filter_current_operation(frame(T["turnos"])))
     metric_labels = [("ABIERTO", "Por confirmar"), ("CONFIRMADO", "En ejecución"),
                      ("CERRADO", "Cierres pendientes"), ("VALIDADO", "Finalizados")]
@@ -1149,11 +1244,19 @@ elif role == "JEFATURA" and page == "Usuarios y accesos":
                     st.success("Usuario creado correctamente.")
                     st.rerun()
 
+elif role == "JEFATURA" and page == "Planificación":
+    render_planning_view()
+
+elif role == "JEFATURA" and page == "Reportes":
+    render_reports_view()
+
 elif role == "JEFATURA":
-    st.title(f"{page} · {selected_operation}")
+    st.title(f"Dashboard · {selected_operation}")
     if page in ["Panel", "Turnos"]:
         data = today_turns(filter_current_operation(frame(T["turnos"])))
         if page == "Panel":
+            render_module_cards(role)
+            st.subheader("Estado general de hoy")
             metric_labels = [("ABIERTO", "Por confirmar"), ("CONFIRMADO", "En ejecución"),
                              ("CERRADO", "Cierres pendientes"), ("VALIDADO", "Finalizados")]
             for column, (status, label_text) in zip(st.columns(4), metric_labels):
