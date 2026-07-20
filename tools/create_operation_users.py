@@ -37,6 +37,11 @@ USERS = [
         "operacion": "Acopios",
         "clave_hash": "3e2848b8c61aa4ef7b8ecb39926e89840be3aaed748484e6d1fcdb8d387bb598",
     },
+    {
+        "nombre": "Asistente de Pruebas", "usuario": "asistente.pruebas", "rol": "ASISTENTE",
+        "operacion": "Lavado de jabas", "acceso_global": True,
+        "clave_hash": "b76827540c7d67ade3ac878454325f284d40d244f41ba8aeeafebc46083c47b0",
+    },
 ]
 
 
@@ -69,6 +74,8 @@ def main():
         for config_key, value, description in (
             (f"operacion_usuario:{user_id}", spec["operacion"], "Operación principal asignada al usuario"),
             (f"cambio_clave_pendiente:{user_id}", "PENDIENTE", "Cambio de contraseña temporal pendiente"),
+            (f"acceso_global_operaciones:{user_id}", "true" if spec.get("acceso_global") else "false",
+             "Permiso temporal para probar todas las operaciones"),
         ):
             client.table("configuracion").upsert({
                 "clave": config_key, "valor": value,
