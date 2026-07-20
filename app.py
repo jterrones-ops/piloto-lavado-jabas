@@ -99,6 +99,7 @@ ACOPIOS = {
     "A13-A12": {"capacidad": 15000, "tipo": "Manual"},
     "D12-D13": {"capacidad": 15000, "tipo": "Manual"},
 }
+ALL_OPERATIONS = "Todas las operaciones"
 LIMA = ZoneInfo("America/Lima")
 
 
@@ -323,6 +324,8 @@ role = str(user_row["rol"]).upper()
 account_role = role
 user_operation = assigned_operation(user_id)
 global_operation_access = has_global_operation_access(user_id)
+if account_role == "JEFATURA":
+    st.session_state["selected_operation"] = ALL_OPERATIONS
 
 st.sidebar.title("Operaciones Logísticas")
 st.sidebar.write(f"**{user_name}**")
@@ -385,27 +388,22 @@ if not st.session_state.get("selected_operation"):
                 st.rerun()
     st.stop()
 
-st.sidebar.caption(f"Operación: {st.session_state['selected_operation']}")
-if (account_role == "JEFATURA" or global_operation_access) and st.sidebar.button(
+if account_role == "JEFATURA":
+    st.sidebar.caption("Vista: Todas las operaciones")
+else:
+    st.sidebar.caption(f"Operación: {st.session_state['selected_operation']}")
+if global_operation_access and st.sidebar.button(
     "Cambiar operación", use_container_width=True
 ):
     st.session_state.pop("selected_operation", None)
     st.rerun()
 
 selected_operation = st.session_state["selected_operation"]
-operation_config = next(operation for operation in OPERACIONES if operation["name"] == selected_operation)
-LABORES = operation_config["labores"]
-
-if account_role == "JEFATURA":
-    test_modes = {
-        "Jefatura": "JEFATURA",
-        "Asistente (pruebas)": "ASISTENTE",
-        "Supervisor (pruebas)": "SUPERVISOR",
-    }
-    selected_mode = st.sidebar.selectbox("Ver sistema como", list(test_modes), key="management_test_mode")
-    role = test_modes[selected_mode]
-    if role != "JEFATURA":
-        st.sidebar.info(f"Modo de pruebas: {selected_mode}")
+operation_config = next(
+    (operation for operation in OPERACIONES if operation["name"] == selected_operation),
+    None,
+)
+LABORES = operation_config["labores"] if operation_config else []
 
 sections = {
     "ASISTENTE": ["Planificación", "Operaciones", "Reportes"],
@@ -460,6 +458,8 @@ def turn_label(row):
 
 
 def filter_current_operation(data):
+    if selected_operation == ALL_OPERATIONS:
+        return data
     if data.empty or "responsable_operacion" not in data:
         return data
     operation_names = [operation["name"] for operation in OPERACIONES]
@@ -623,18 +623,33 @@ def render_module_cards(current_role):
 
 
 def render_planning_view():
-    st.title(f"Planificación · {selected_operation}")
-    st.caption("Vista de la programación de turnos y recursos.")
-    schedules = pd.DataFrame([
-        {"Turno": item["label"], "Inicio": item["start"], "Fin": item["end"]}
-        for item in SHIFT_SCHEDULES[selected_operation]
-    ])
-    st.dataframe(schedules, width="stretch", hide_index=True)
-    if role == "ASISTENTE":
-        planned = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
+    if role == "JEFATURA":
+        st.title("Planificación general")
+        st.caption("Programación consolidada de todas las operaciones.")
+        schedules = pd.DataFrame([
+            {
+                "Operación": operation,
+                "Turno": item["label"],
+                "Inicio": item["start"],
+                "Fin": item["end"],
+            }
+            for operation, items in SHIFT_SCHEDULES.items()
+            for item in items
+        ])
+        planned = today_turns(frame(T["turnos"]))
     else:
-        planned = filter_current_operation(frame(T["turnos"]))
-    planned = today_turns(planned)
+        st.title(f"Planificación · {selected_operation}")
+        st.caption("Vista de la programación de turnos y recursos.")
+        schedules = pd.DataFrame([
+            {"Turno": item["label"], "Inicio": item["start"], "Fin": item["end"]}
+            for item in SHIFT_SCHEDULES[selected_operation]
+        ])
+        if role == "ASISTENTE":
+            planned = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
+        else:
+            planned = filter_current_operation(frame(T["turnos"]))
+        planned = today_turns(planned)
+    st.dataframe(schedules, width="stretch", hide_index=True)
     st.metric("Turnos programados para hoy", len(planned))
     if role == "ASISTENTE":
         st.info("El asistente consulta la planificación. La modificación corresponde al supervisor o Jefatura.")
@@ -643,13 +658,23 @@ def render_planning_view():
     else:
         st.info("Jefatura consolida la planificación general y las asignaciones.")
 
-
 def render_reports_view():
-    st.title(f"Reportes · {selected_operation}")
-    if role == "ASISTENTE":
-        turns = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
+    if role == "JEFATURA":
+        st.title("Reportes")
+        operation_names = [ALL_OPERATIONS] + [operation["name"] for operation in OPERACIONES]
+        report_operation = st.selectbox("Proceso", operation_names, key="management_report_operation")
+        turns = frame(T["turnos"])
+        if report_operation != ALL_OPERATIONS and not turns.empty:
+            turns = turns[
+                turns["responsable_operacion"].fillna("").astype(str) == report_operation
+            ]
     else:
-        turns = filter_current_operation(frame(T["turnos"]))
+        st.title(f"Reportes · {selected_operation}")
+        if role == "ASISTENTE":
+            turns = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
+        else:
+            turns = filter_current_operation(frame(T["turnos"]))
+
     daily_turns = today_turns(turns)
     c1, c2, c3 = st.columns(3)
     c1.metric("Turnos del día", len(daily_turns))
@@ -664,11 +689,30 @@ def render_reports_view():
     else:
         incidents = pd.DataFrame()
     c3.metric("Incidencias", len(incidents))
-    render_daily_turn_table(daily_turns, f"reports_daily_{role}_{selected_operation}")
+
+    if role == "JEFATURA":
+        if daily_turns.empty:
+            st.info("No hay datos registrados para hoy.")
+        else:
+            columns = [
+                "responsable_operacion", "tipo_turno", "estado",
+                "hora_programada_inicio", "hora_programada_fin",
+            ]
+            view = daily_turns[[column for column in columns if column in daily_turns]].copy()
+            view = view.rename(columns={
+                "responsable_operacion": "Proceso",
+                "tipo_turno": "Turno",
+                "estado": "Estado",
+                "hora_programada_inicio": "Hora inicio",
+                "hora_programada_fin": "Hora final",
+            })
+            st.dataframe(view, width="stretch", hide_index=True)
+    else:
+        render_daily_turn_table(daily_turns, f"reports_daily_{role}_{selected_operation}")
+
     if not incidents.empty:
         with st.expander("Ver incidencias del día"):
             st.dataframe(incident_summary(incidents), width="stretch", hide_index=True)
-
 
 if role == "ASISTENTE" and page == "Planificación":
     render_planning_view()
@@ -1291,36 +1335,36 @@ elif role == "JEFATURA" and page == "Reportes":
     render_reports_view()
 
 elif role == "JEFATURA":
-    st.title(f"Dashboard · {selected_operation}")
-    if page in ["Panel", "Turnos"]:
-        data = today_turns(filter_current_operation(frame(T["turnos"])))
-        if page == "Panel":
-            render_module_cards(role)
-            st.subheader("Estado general de hoy")
-            metric_labels = [("ABIERTO", "Por confirmar"), ("CONFIRMADO", "En ejecución"),
-                             ("CERRADO", "Cierres pendientes"), ("VALIDADO", "Finalizados")]
-            for column, (status, label_text) in zip(st.columns(4), metric_labels):
-                column.metric(label_text, int((data["estado"] == status).sum()) if not data.empty else 0)
-        render_daily_turn_table(data, f"management_daily_shift_{page}")
-    elif page == "Incidencias":
-        turns = today_turns(filter_current_operation(frame(T["turnos"])))
-        incidents = frame(T["inc"])
-        if turns.empty or incidents.empty:
-            st.info("Sin incidencias registradas en esta operación.")
-        else:
-            turn_ids = set(turns["id"].astype(str))
-            incidents = incidents[incidents["turno_id"].astype(str).isin(turn_ids)]
-            if not incidents.empty:
-                st.dataframe(incident_summary(incidents), width="stretch", hide_index=True)
-            else:
-                st.info("Sin incidencias registradas en esta operación.")
-    else:
-        data = frame(T["audit"])
-        st.caption("Detalle técnico reservado para trazabilidad y revisión.")
-        if not data.empty:
-            st.dataframe(data, width="stretch", hide_index=True)
-        else:
-            st.info("Sin datos para reporte.")
+    st.title("Dashboard general")
+    render_module_cards(role)
+    st.subheader("Estado general de hoy")
+    data = today_turns(frame(T["turnos"]))
+    metric_labels = [
+        ("ABIERTO", "Por confirmar"),
+        ("CONFIRMADO", "En ejecución"),
+        ("CERRADO", "Cierres pendientes"),
+        ("VALIDADO", "Finalizados"),
+    ]
+    for column, (status, label_text) in zip(st.columns(4), metric_labels):
+        column.metric(
+            label_text,
+            int((data["estado"] == status).sum()) if not data.empty else 0,
+        )
+
+    st.subheader("Procesos")
+    rows = []
+    for operation in [item["name"] for item in OPERACIONES]:
+        operation_data = data[
+            data["responsable_operacion"].fillna("").astype(str) == operation
+        ] if not data.empty else pd.DataFrame()
+        rows.append({
+            "Proceso": operation,
+            "Programados": len(operation_data),
+            "Por confirmar": int((operation_data["estado"] == "ABIERTO").sum()) if not operation_data.empty else 0,
+            "En ejecución": int((operation_data["estado"] == "CONFIRMADO").sum()) if not operation_data.empty else 0,
+            "Finalizados": int((operation_data["estado"] == "VALIDADO").sum()) if not operation_data.empty else 0,
+        })
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
 st.divider()
 st.caption("Control de Operaciones Logísticas ")
