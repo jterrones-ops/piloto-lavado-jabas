@@ -29,5 +29,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           LOAD_TEST_BATCH: loadtest-20260720-001
-          LOAD_TEST_ACTION: cleanup
+          LOAD_TEST_ACTION: load
         run: python tools/load_supabase_test.py
