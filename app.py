@@ -150,6 +150,44 @@ def frame(table, filters=None, order="creado_en"):
     return pd.DataFrame(get(table, filters, order))
 
 
+def paged_frame(table, filters=None, order="creado_en", page_size=1000):
+    rows = []
+    offset = 0
+    while True:
+        try:
+            query = sb.table(table).select("*")
+            for key, value in (filters or {}).items():
+                query = query.eq(key, value)
+            if order:
+                query = query.order(order, desc=True)
+            batch = query.range(offset, offset + page_size - 1).execute().data or []
+        except Exception:
+            st.error("No se pudo consultar la información completa del Dashboard.")
+            st.stop()
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return pd.DataFrame(rows)
+
+
+def frame_for_turn_ids(table, turn_ids, chunk_size=100):
+    ids = list({str(turn_id) for turn_id in turn_ids})
+    rows = []
+    for offset in range(0, len(ids), chunk_size):
+        try:
+            batch = (
+                sb.table(table).select("*")
+                .in_("turno_id", ids[offset:offset + chunk_size])
+                .execute().data or []
+            )
+        except Exception:
+            st.error("No se pudo completar el resumen operativo del Dashboard.")
+            st.stop()
+        rows.extend(batch)
+    return pd.DataFrame(rows)
+
+
 def add(table, data):
     try:
         rows = sb.table(table).insert(data).execute().data or []
@@ -186,6 +224,35 @@ def acopio_trips(turn_id):
         trip["_key"] = key
         trips.append(trip)
     return sorted(trips, key=lambda item: item.get("salida", ""), reverse=True)
+
+
+def acopio_entries(turn_id):
+    prefix = f"ingreso_acopio:{turn_id}:"
+    entries = []
+    try:
+        rows = sb.table(T["config"]).select("clave,valor").like("clave", f"{prefix}%").execute().data or []
+    except Exception:
+        st.error("No se pudieron consultar las recepciones del acopio.")
+        st.stop()
+    for row in rows:
+        try:
+            entry = json.loads(row.get("valor") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        entry["_key"] = row.get("clave")
+        entries.append(entry)
+    return sorted(entries, key=lambda item: item.get("hora", ""), reverse=True)
+
+
+def save_acopio_entry(turn_id, entry):
+    key = f"ingreso_acopio:{turn_id}:{uuid4()}"
+    add(T["config"], {
+        "clave": key,
+        "valor": json.dumps(entry, ensure_ascii=False),
+        "descripcion": "Recepción de jabas en punto de acopio",
+        "actualizado_en": now(),
+    })
+    return key
 
 
 def save_acopio_trip(turn_id, trip):
@@ -235,6 +302,136 @@ def save_assigned_operation(account_id, operation):
         "descripcion": "Operación principal asignada al usuario",
         "actualizado_en": now(),
     }, on_conflict="clave").execute()
+
+
+def daily_plan_key(plan_date):
+    return f"plan_diario:{plan_date}"
+
+
+def load_daily_plan(plan_date):
+    rows = get(T["config"], {"clave": daily_plan_key(plan_date)}, order=None)
+    if not rows:
+        return {"jabas_recibidas": 0, "jabas_packing": 0, "procesos": {}}
+    try:
+        plan = json.loads(rows[0].get("valor") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        plan = {}
+    plan.setdefault("jabas_recibidas", 0)
+    plan.setdefault("jabas_packing", 0)
+    plan.setdefault("procesos", {})
+    return plan
+
+
+def save_daily_plan(plan_date, plan):
+    sb.table(T["config"]).upsert({
+        "clave": daily_plan_key(plan_date),
+        "valor": json.dumps(plan, ensure_ascii=False),
+        "descripcion": "Planificación diaria consolidada de Jefatura",
+        "actualizado_en": now(),
+    }, on_conflict="clave").execute()
+
+
+def acopio_trip_totals(turn_ids):
+    turn_ids = {str(turn_id) for turn_id in turn_ids}
+    total_jabas = 0
+    total_trips = 0
+    if not turn_ids:
+        return total_jabas, total_trips
+    offset = 0
+    while True:
+        try:
+            rows = (
+                sb.table(T["config"]).select("clave,valor")
+                .like("clave", "viaje_acopio:%")
+                .range(offset, offset + 999).execute().data or []
+            )
+        except Exception:
+            st.error("No se pudo completar el total de viajes a packing.")
+            st.stop()
+        for row in rows:
+            key = str(row.get("clave", ""))
+            parts = key.split(":", 2)
+            if len(parts) < 3 or parts[1] not in turn_ids:
+                continue
+            try:
+                trip = json.loads(row.get("valor") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            total_trips += 1
+            total_jabas += int(trip.get("total_jabas", 0) or 0)
+        if len(rows) < 1000:
+            break
+        offset += 1000
+    return total_jabas, total_trips
+
+
+def acopio_entry_totals(turn_ids):
+    turn_ids = {str(turn_id) for turn_id in turn_ids}
+    total_jabas = 0
+    total_entries = 0
+    if not turn_ids:
+        return total_jabas, total_entries
+    offset = 0
+    while True:
+        try:
+            rows = (
+                sb.table(T["config"]).select("clave,valor")
+                .like("clave", "ingreso_acopio:%")
+                .range(offset, offset + 999).execute().data or []
+            )
+        except Exception:
+            st.error("No se pudo completar el total de jabas recibidas en acopios.")
+            st.stop()
+        for row in rows:
+            parts = str(row.get("clave", "")).split(":", 2)
+            if len(parts) < 3 or parts[1] not in turn_ids:
+                continue
+            try:
+                entry = json.loads(row.get("valor") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                continue
+            total_entries += 1
+            total_jabas += int(entry.get("total_jabas", 0) or 0)
+        if len(rows) < 1000:
+            break
+        offset += 1000
+    return total_jabas, total_entries
+
+
+def production_total(turn_ids):
+    total = 0
+    for turn_id in {str(turn_id) for turn_id in turn_ids}:
+        production = frame(T["prod"], {"turno_id": turn_id})
+        if not production.empty and "jabas_lavadas" in production:
+            total += int(pd.to_numeric(
+                production["jabas_lavadas"], errors="coerce"
+            ).fillna(0).sum())
+    return total
+
+
+def personnel_total(turn_ids):
+    total = 0
+    for turn_id in {str(turn_id) for turn_id in turn_ids}:
+        personal = frame(T["personal"], {"turno_id": turn_id})
+        if not personal.empty and "cantidad_personas" in personal:
+            total += int(pd.to_numeric(
+                personal["cantidad_personas"], errors="coerce"
+            ).fillna(0).sum())
+    return total
+
+
+def plan_status(operation_data, planned_people, actual_people, incident_count=0):
+    if planned_people <= 0:
+        return "Sin planificación", "off"
+    if operation_data.empty:
+        return "Fuera de lo planificado", "red"
+    coverage = actual_people / planned_people if planned_people else 0
+    waiting = int((operation_data["estado"] == "ABIERTO").sum())
+    if coverage >= 1 and waiting == 0 and incident_count == 0:
+        return "Dentro de lo planificado", "green"
+    if coverage >= 0.9 and incident_count == 0:
+        return "En riesgo", "orange"
+    return "Fuera de lo planificado", "red"
 
 
 def audit(table, record_id, field, old, new, reason, user_id):
@@ -636,7 +833,64 @@ def render_module_cards(current_role):
 def render_planning_view():
     if role == "JEFATURA":
         st.title("Planificación general")
-        st.caption("Programación consolidada de todas las operaciones.")
+        st.caption("Define las metas del día que utilizará el Dashboard consolidado.")
+        plan_date = st.date_input("Fecha de planificación", datetime.now(LIMA).date())
+        plan_date_text = str(plan_date)
+        current_plan = load_daily_plan(plan_date_text)
+
+        st.subheader("Metas de movimiento de jabas")
+        c1, c2 = st.columns(2)
+        planned_received = c1.number_input(
+            "Jabas planificadas para recibir en acopios",
+            min_value=0,
+            max_value=10000000,
+            value=int(current_plan.get("jabas_recibidas", 0) or 0),
+            step=100,
+        )
+        planned_packing = c2.number_input(
+            "Jabas planificadas para enviar a packing",
+            min_value=0,
+            max_value=10000000,
+            value=int(current_plan.get("jabas_packing", 0) or 0),
+            step=100,
+        )
+
+        st.subheader("Personal planificado por proceso")
+        plan_rows = []
+        for operation in [item["name"] for item in OPERACIONES]:
+            process_plan = current_plan.get("procesos", {}).get(operation, {})
+            plan_rows.append({
+                "Proceso": operation,
+                "Personal planificado": int(process_plan.get("personal", 0) or 0),
+            })
+        people_editor = st.data_editor(
+            pd.DataFrame(plan_rows),
+            hide_index=True,
+            use_container_width=True,
+            disabled=["Proceso"],
+            column_config={
+                "Proceso": st.column_config.TextColumn("Proceso"),
+                "Personal planificado": st.column_config.NumberColumn(
+                    "Personal planificado", min_value=0, step=1, required=True
+                ),
+            },
+            key=f"daily_plan_people_{plan_date_text}",
+        )
+        if st.button("Guardar planificación del día", type="primary", use_container_width=True):
+            processes = {}
+            for _, plan_row in people_editor.iterrows():
+                quantity = plan_row.get("Personal planificado", 0)
+                quantity = 0 if pd.isna(quantity) else int(quantity)
+                processes[str(plan_row["Proceso"])] = {"personal": quantity}
+            save_daily_plan(plan_date_text, {
+                "jabas_recibidas": int(planned_received),
+                "jabas_packing": int(planned_packing),
+                "procesos": processes,
+            })
+            st.success("Planificación guardada. El Dashboard ya usará estas metas.")
+
+        st.divider()
+        st.subheader("Horarios programados")
         schedules = pd.DataFrame([
             {
                 "Operación": operation,
@@ -973,12 +1227,91 @@ elif role == "ASISTENTE" and page == "Operación":
                 c2.metric("Capacidad", f"{acopio_data['capacidad']:,} jabas")
 
                 trips = acopio_trips(turn_id)
-                total_jabas = sum(int(item.get("total_jabas", 0) or 0) for item in trips)
+                entries = acopio_entries(turn_id)
+                received_jabas = sum(int(item.get("total_jabas", 0) or 0) for item in entries)
+                sent_jabas = sum(int(item.get("total_jabas", 0) or 0) for item in trips)
                 in_transit = [item for item in trips if item.get("estado") == "EN_TRANSITO"]
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Viajes", len(trips))
-                c2.metric("Jabas", f"{total_jabas:,}")
-                c3.metric("En tránsito", len(in_transit))
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Jabas recibidas", f"{received_jabas:,}")
+                c2.metric("Jabas enviadas a packing", f"{sent_jabas:,}")
+                c3.metric("Saldo en acopio", f"{max(received_jabas - sent_jabas, 0):,}")
+                c4.metric("Viajes en tránsito", len(in_transit))
+
+                st.markdown("#### Registrar recepción en acopio")
+                with st.form("register_acopio_entry", clear_on_submit=True):
+                    c1, c2, c3 = st.columns(3)
+                    origin = c1.text_input("Procedencia o lote")
+                    delivered_by = c2.text_input("Responsable de entrega")
+                    entry_time = c3.time_input(
+                        "Hora de recepción", datetime.now(LIMA).time().replace(second=0, microsecond=0)
+                    )
+                    entry_editor = st.data_editor(
+                        pd.DataFrame([{"Variedad": "", "Jabas": 0}]),
+                        num_rows="dynamic",
+                        hide_index=True,
+                        use_container_width=True,
+                        column_config={
+                            "Variedad": st.column_config.TextColumn("Variedad", required=True),
+                            "Jabas": st.column_config.NumberColumn(
+                                "Jabas", min_value=0, step=1, required=True
+                            ),
+                        },
+                        key="entry_varieties_editor",
+                    )
+                    if st.form_submit_button(
+                        "Registrar recepción", type="primary", use_container_width=True
+                    ):
+                        details = []
+                        for _, detail in entry_editor.iterrows():
+                            variety = str(detail.get("Variedad") or "").strip()
+                            amount = detail.get("Jabas", 0)
+                            amount = 0 if pd.isna(amount) else int(amount)
+                            if variety and amount > 0:
+                                details.append({"variedad": variety, "jabas": amount})
+                        if not origin.strip():
+                            st.error("Indica la procedencia o lote.")
+                        elif not delivered_by.strip():
+                            st.error("Indica el responsable de entrega.")
+                        elif not details:
+                            st.error("Agrega al menos una variedad con cantidad de jabas.")
+                        else:
+                            turn = frame(T["turnos"], {"id": turn_id}).iloc[0]
+                            entry_day = date.fromisoformat(str(turn["fecha"]))
+                            entry_datetime = datetime.combine(entry_day, entry_time, tzinfo=LIMA)
+                            entry = {
+                                "numero": len(entries) + 1,
+                                "acopio": location,
+                                "procedencia": origin.strip(),
+                                "responsable_entrega": delivered_by.strip(),
+                                "hora": entry_datetime.isoformat(timespec="seconds"),
+                                "variedades": details,
+                                "total_jabas": sum(item["jabas"] for item in details),
+                                "registrado_por": user_id,
+                            }
+                            save_acopio_entry(turn_id, entry)
+                            audit(
+                                "ingresos_acopio", turn_id, "recepcion", None,
+                                entry["total_jabas"], f"{location} · {origin.strip()}", user_id
+                            )
+                            st.rerun()
+
+                if entries:
+                    with st.expander("Ver recepciones registradas"):
+                        entry_rows = []
+                        for item in entries:
+                            varieties = ", ".join(
+                                f"{detail['variedad']}: {detail['jabas']}"
+                                for detail in item.get("variedades", [])
+                            )
+                            entry_rows.append({
+                                "Recepción": item.get("numero"),
+                                "Hora": display_clock(item.get("hora")),
+                                "Procedencia": item.get("procedencia"),
+                                "Responsable": item.get("responsable_entrega"),
+                                "Jabas": item.get("total_jabas", 0),
+                                "Variedades": varieties,
+                            })
+                        st.dataframe(pd.DataFrame(entry_rows), width="stretch", hide_index=True)
 
                 st.markdown("#### Registrar salida")
                 with st.form("register_acopio_trip", clear_on_submit=True):
@@ -1346,36 +1679,121 @@ elif role == "JEFATURA" and page == "Reportes":
     render_reports_view()
 
 elif role == "JEFATURA":
-    st.title("Dashboard general")
-    render_module_cards(role)
-    st.subheader("Estado general de hoy")
-    data = today_turns(frame(T["turnos"]))
-    metric_labels = [
-        ("ABIERTO", "Por confirmar"),
-        ("CONFIRMADO", "En ejecución"),
-        ("CERRADO", "Cierres pendientes"),
-        ("VALIDADO", "Finalizados"),
-    ]
-    for column, (status, label_text) in zip(st.columns(4), metric_labels):
-        column.metric(
-            label_text,
-            int((data["estado"] == status).sum()) if not data.empty else 0,
-        )
+    today_text = str(datetime.now(LIMA).date())
+    st.title("Dashboard consolidado")
+    st.caption(f"Resumen operativo de todos los procesos · {datetime.now(LIMA).strftime('%d/%m/%Y')}")
+    data = paged_frame(T["turnos"], {"fecha": today_text})
+    if not data.empty and "observacion_apertura" in data:
+        data = data[
+            ~data["observacion_apertura"].fillna("").astype(str).str.contains(
+                "PRUEBA_CARGA", case=False, regex=False
+            )
+        ]
+    daily_plan = load_daily_plan(today_text)
+    all_turn_ids = set(data["id"].astype(str)) if not data.empty else set()
+    dashboard_personal = frame_for_turn_ids(T["personal"], all_turn_ids)
+    dashboard_production = frame_for_turn_ids(T["prod"], all_turn_ids)
+    incidents = frame_for_turn_ids(T["inc"], all_turn_ids)
+    acopio_data = data[
+        data["responsable_operacion"].fillna("").astype(str) == "Acopios"
+    ] if not data.empty else pd.DataFrame()
+    acopio_turn_ids = set(acopio_data["id"].astype(str)) if not acopio_data.empty else set()
+    recorded_received_jabas, reception_count = acopio_entry_totals(acopio_turn_ids)
+    if not dashboard_production.empty and acopio_turn_ids:
+        acopio_production = dashboard_production[
+            dashboard_production["turno_id"].astype(str).isin(acopio_turn_ids)
+        ]
+        closed_received_jabas = int(pd.to_numeric(
+            acopio_production.get("jabas_lavadas", pd.Series(dtype=float)), errors="coerce"
+        ).fillna(0).sum())
+    else:
+        closed_received_jabas = 0
+    received_jabas = recorded_received_jabas if reception_count else closed_received_jabas
+    packing_jabas, packing_trips = acopio_trip_totals(acopio_turn_ids)
+    stock_jabas = max(received_jabas - packing_jabas, 0)
+    open_incidents = int(
+        (incidents["estado"].astype(str).str.upper() == "ABIERTA").sum()
+    ) if not incidents.empty and "estado" in incidents else 0
 
-    st.subheader("Procesos")
-    rows = []
+    planned_received = int(daily_plan.get("jabas_recibidas", 0) or 0)
+    planned_packing = int(daily_plan.get("jabas_packing", 0) or 0)
+
+    def plan_delta(actual, planned):
+        return f"{actual / planned:.1%} del plan" if planned > 0 else "Sin meta registrada"
+
+    st.subheader("Movimiento de jabas")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric(
+        "Jabas recibidas en acopios",
+        f"{received_jabas:,}",
+        plan_delta(received_jabas, planned_received),
+        delta_color="off",
+    )
+    c2.metric(
+        "Jabas enviadas a packing",
+        f"{packing_jabas:,}",
+        plan_delta(packing_jabas, planned_packing),
+        delta_color="off",
+    )
+    c3.metric(
+        "Jabas en acopios", f"{stock_jabas:,}",
+        f"{reception_count} recepciones · {packing_trips} viajes", delta_color="off"
+    )
+    c4.metric("Incidencias abiertas", open_incidents)
+
+    render_module_cards(role)
+
+    st.subheader("Estado por proceso")
+    st.caption("La evaluación compara el personal registrado con la planificación diaria de Jefatura.")
+    process_columns = st.columns(5)
     for operation in [item["name"] for item in OPERACIONES]:
         operation_data = data[
             data["responsable_operacion"].fillna("").astype(str) == operation
         ] if not data.empty else pd.DataFrame()
-        rows.append({
-            "Proceso": operation,
-            "Programados": len(operation_data),
-            "Por confirmar": int((operation_data["estado"] == "ABIERTO").sum()) if not operation_data.empty else 0,
-            "En ejecución": int((operation_data["estado"] == "CONFIRMADO").sum()) if not operation_data.empty else 0,
-            "Finalizados": int((operation_data["estado"] == "VALIDADO").sum()) if not operation_data.empty else 0,
-        })
-    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+        turn_ids = set(operation_data["id"].astype(str)) if not operation_data.empty else set()
+        if not dashboard_personal.empty and turn_ids:
+            process_personal = dashboard_personal[
+                dashboard_personal["turno_id"].astype(str).isin(turn_ids)
+            ]
+            actual_people = int(pd.to_numeric(
+                process_personal.get("cantidad_personas", pd.Series(dtype=float)), errors="coerce"
+            ).fillna(0).sum())
+        else:
+            actual_people = 0
+        planned_people = int(
+            daily_plan.get("procesos", {}).get(operation, {}).get("personal", 0) or 0
+        )
+        incident_count = 0
+        if not incidents.empty and turn_ids:
+            process_incidents = incidents[incidents["turno_id"].astype(str).isin(turn_ids)]
+            if "estado" in process_incidents:
+                process_incidents = process_incidents[
+                    process_incidents["estado"].astype(str).str.upper() == "ABIERTA"
+                ]
+            incident_count = len(process_incidents)
+        status_text, status_color = plan_status(
+            operation_data, planned_people, actual_people, incident_count
+        )
+        column = process_columns[[item["name"] for item in OPERACIONES].index(operation)]
+        with column.container(border=True):
+            st.markdown(f"**{operation}**")
+            if status_color == "green":
+                st.success(status_text)
+            elif status_color == "orange":
+                st.warning(status_text)
+            elif status_color == "red":
+                st.error(status_text)
+            else:
+                st.info(status_text)
+            st.metric("Personal real / plan", f"{actual_people} / {planned_people}")
+            st.caption(
+                f"Turnos: {len(operation_data)} · En ejecución: "
+                f"{int((operation_data['estado'] == 'CONFIRMADO').sum()) if not operation_data.empty else 0}"
+            )
+            if st.button("Ver reporte", key=f"management_process_{operation}", use_container_width=True):
+                st.session_state["management_report_operation"] = operation
+                st.session_state["current_section_JEFATURA"] = "Reportes"
+                st.rerun()
 
 st.divider()
 st.caption("Control de Operaciones Logísticas ")
