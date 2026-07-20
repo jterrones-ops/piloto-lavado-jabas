@@ -434,6 +434,75 @@ def plan_status(operation_data, planned_people, actual_people, incident_count=0)
     return "Fuera de lo planificado", "red"
 
 
+def render_management_budget_demo():
+    """Jefatura-only preview of the agreed washing budget comparison."""
+    st.info("Vista de prueba ficticia · Solo visible para Jefatura · No guarda datos")
+
+    daily_jabas = 90000
+    planned_white = int(daily_jabas * 0.40)
+    planned_red = int(daily_jabas * 0.10)
+    planned_total = planned_white + planned_red
+    planned_people = int((planned_white / 1500) + (planned_red / 500) + 0.5)
+    planned_cost = planned_people * 26.47
+
+    actual_white = 34000
+    actual_red = 8500
+    actual_total = actual_white + actual_red
+    actual_people = 44
+    actual_cost = actual_people * 26.47
+    compliance = actual_total / planned_total if planned_total else 0
+
+    st.subheader("Lavado de jabas · Presupuesto frente a ejecución")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Jabas del plan diario", f"{daily_jabas:,}")
+    c2.metric("Planificadas para lavar", f"{planned_total:,}")
+    c3.metric("Lavadas realmente", f"{actual_total:,}", f"{actual_total - planned_total:,}")
+    c4.metric("Cumplimiento", f"{compliance:.1%}", f"{compliance - 1:.1%}")
+
+    comparison = pd.DataFrame([
+        {
+            "Indicador": "Jabas blancas",
+            "Presupuesto": f"{planned_white:,}",
+            "Real": f"{actual_white:,}",
+            "Diferencia": f"{actual_white - planned_white:,}",
+            "Estado": "Bajo el plan",
+        },
+        {
+            "Indicador": "Jabas rojas",
+            "Presupuesto": f"{planned_red:,}",
+            "Real": f"{actual_red:,}",
+            "Diferencia": f"{actual_red - planned_red:,}",
+            "Estado": "Bajo el plan",
+        },
+        {
+            "Indicador": "Total lavado",
+            "Presupuesto": f"{planned_total:,}",
+            "Real": f"{actual_total:,}",
+            "Diferencia": f"{actual_total - planned_total:,}",
+            "Estado": f"{compliance:.1%} de cumplimiento",
+        },
+        {
+            "Indicador": "Personal",
+            "Presupuesto": str(planned_people),
+            "Real": str(actual_people),
+            "Diferencia": f"+{actual_people - planned_people}",
+            "Estado": "Sobre el plan",
+        },
+        {
+            "Indicador": "Costo de personal",
+            "Presupuesto": f"US${planned_cost:,.2f}",
+            "Real": f"US${actual_cost:,.2f}",
+            "Diferencia": f"+US${actual_cost - planned_cost:,.2f}",
+            "Estado": "Sobre el presupuesto",
+        },
+    ])
+    st.dataframe(comparison, width="stretch", hide_index=True)
+    st.caption(
+        "Reglas aplicadas: 40% blancas, 10% rojas, rendimientos de 1,500 y 500 "
+        "jabas por jornada, redondeo convencional y US$26.47 por persona/jornada."
+    )
+
+
 def audit(table, record_id, field, old, new, reason, user_id):
     add(T["audit"], {
         "tabla": table, "registro_id": record_id, "campo": field,
@@ -604,7 +673,7 @@ LABORES = operation_config["labores"] if operation_config else []
 
 sections = {
     "ASISTENTE": ["Planificación", "Operaciones", "Reportes"],
-    "SUPERVISOR": ["Dashboard", "Planificación", "Operaciones", "Reportes"],
+    "SUPERVISOR": ["Dashboard", "Operaciones", "Reportes"],
     "JEFATURA": ["Dashboard", "Planificación", "Reportes", "Administración"],
 }
 if role not in sections:
@@ -826,13 +895,18 @@ def render_module_cards(current_role):
             ("Reportes", "Analiza resultados, incidencias y cumplimiento."),
             ("Administración", "Gestiona usuarios, accesos y configuraciones."),
         ]
+    elif current_role == "SUPERVISOR":
+        items = [
+            ("Operaciones", "Valida aperturas, seguimiento y cierres."),
+            ("Reportes", "Revisa los resultados reales de su operación."),
+        ]
     else:
         items = [
             ("Planificación", "Consulta lo programado para la jornada."),
             ("Operaciones", "Registra y controla la ejecución del turno."),
             ("Reportes", "Revisa resultados e incidencias."),
         ]
-    for index, (column, (title, description)) in enumerate(zip(st.columns(3), items)):
+    for index, (column, (title, description)) in enumerate(zip(st.columns(len(items)), items)):
         with column.container(border=True):
             st.subheader(title)
             st.caption(description)
@@ -1743,6 +1817,9 @@ elif role == "JEFATURA":
     today_text = str(datetime.now(LIMA).date())
     st.title("Dashboard consolidado")
     st.caption(f"Resumen operativo de todos los procesos · {datetime.now(LIMA).strftime('%d/%m/%Y')}")
+    if st.toggle("Mostrar prueba ficticia de Lavado", value=True, key="management_budget_demo"):
+        render_management_budget_demo()
+        st.divider()
     data = paged_frame(T["turnos"], {"fecha": today_text})
     if not data.empty and "observacion_apertura" in data:
         data = data[
