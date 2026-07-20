@@ -139,7 +139,7 @@ def build_operation(operation: str, assistant_id: str, supervisor_id: str, marke
         incident_start = started + timedelta(minutes=30)
         incident_end = incident_start + timedelta(minutes=15 + sequence % 60)
         tables["incidencias"].append({
-            "turno_id": turn_id, "tipo": "Prueba controlada",
+            "turno_id": turn_id, "tipo": "Otro",
             "descripcion": marker, "hora_inicio": incident_start.isoformat(timespec="seconds"),
             "hora_fin": incident_end.isoformat(timespec="seconds"),
             "duracion_minutos": int((incident_end - incident_start).total_seconds() / 60),
@@ -215,22 +215,44 @@ def delete_by_ids(client, table: str, column: str, ids: list[str]) -> None:
 
 
 def cleanup(client, marker: str) -> int:
-    rows = client.table("turnos").select("id").like("observacion_apertura", f"%{marker}%").execute().data or []
-    turn_ids = [str(row["id"]) for row in rows]
+    deleted_total = 0
     client.table("configuracion").delete().eq("descripcion", marker).execute()
-    if turn_ids:
+    while True:
+        rows = client.table("turnos").select("id").like(
+            "observacion_apertura", f"%{marker}%"
+        ).limit(1000).execute().data or []
+        turn_ids = [str(row["id"]) for row in rows]
+        if not turn_ids:
+            break
         delete_by_ids(client, "auditoria", "registro_id", turn_ids)
         for table in ("produccion_turno", "traslados_personal", "incidencias", "personal_labor"):
             delete_by_ids(client, table, "turno_id", turn_ids)
         delete_by_ids(client, "turnos", "id", turn_ids)
-    return len(turn_ids)
+        deleted_total += len(turn_ids)
+    return deleted_total
+
+
+def fetch_all(client, table: str, columns: str, filter_name: str, filter_value: str):
+    rows = []
+    offset = 0
+    while True:
+        query = client.table(table).select(columns)
+        if filter_name == "like_observacion":
+            query = query.like("observacion_apertura", filter_value)
+        elif filter_name == "descripcion":
+            query = query.eq("descripcion", filter_value)
+        group = query.range(offset, offset + 999).execute().data or []
+        rows.extend(group)
+        if len(group) < 1000:
+            return rows
+        offset += 1000
 
 
 def verify(client, marker: str):
-    turns = client.table("turnos").select("id,responsable_operacion").like(
-        "observacion_apertura", f"%{marker}%"
-    ).execute().data or []
-    trip_rows = client.table("configuracion").select("clave,valor").eq("descripcion", marker).execute().data or []
+    turns = fetch_all(
+        client, "turnos", "id,responsable_operacion", "like_observacion", f"%{marker}%"
+    )
+    trip_rows = fetch_all(client, "configuracion", "clave,valor", "descripcion", marker)
     trip_rows = [row for row in trip_rows if str(row.get("clave", "")).startswith("viaje_acopio:")]
     crates = sum(int(json.loads(row["valor"]).get("total_jabas", 0)) for row in trip_rows)
     operation_counts = {
