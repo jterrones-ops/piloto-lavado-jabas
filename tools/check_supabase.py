@@ -30,3 +30,5 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"ERROR DE VALIDACION: {type(exc).__name__}: {exc}")
         sys.exit(1)
+
+# Nueva ejecución solicitada después de configurar GitHub Actions Secrets.
