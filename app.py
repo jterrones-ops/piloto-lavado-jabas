@@ -222,6 +222,11 @@ def assigned_operation(account_id):
     return rows[0]["valor"] if rows else "Lavado de jabas"
 
 
+def has_global_operation_access(account_id):
+    rows = get(T["config"], {"clave": f"acceso_global_operaciones:{account_id}"}, order=None)
+    return bool(rows) and str(rows[0].get("valor", "")).strip().lower() == "true"
+
+
 def save_assigned_operation(account_id, operation):
     sb.table(T["config"]).upsert({
         "clave": f"operacion_usuario:{account_id}",
@@ -317,6 +322,7 @@ user_name = str(user_row["nombre"])
 role = str(user_row["rol"]).upper()
 account_role = role
 user_operation = assigned_operation(user_id)
+global_operation_access = has_global_operation_access(user_id)
 
 st.sidebar.title("Operaciones Logísticas")
 st.sidebar.write(f"**{user_name}**")
@@ -325,7 +331,7 @@ if st.sidebar.button("Cerrar sesión", use_container_width=True):
     st.session_state.clear()
     st.rerun()
 
-if role in ("ASISTENTE", "SUPERVISOR"):
+if role in ("ASISTENTE", "SUPERVISOR") and not global_operation_access:
     st.session_state["selected_operation"] = user_operation
 
 if not st.session_state.get("selected_operation"):
@@ -357,7 +363,9 @@ if not st.session_state.get("selected_operation"):
     st.stop()
 
 st.sidebar.caption(f"Operación: {st.session_state['selected_operation']}")
-if account_role == "JEFATURA" and st.sidebar.button("Cambiar operación", use_container_width=True):
+if (account_role == "JEFATURA" or global_operation_access) and st.sidebar.button(
+    "Cambiar operación", use_container_width=True
+):
     st.session_state.pop("selected_operation", None)
     st.rerun()
 
