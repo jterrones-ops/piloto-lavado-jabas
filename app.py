@@ -331,6 +331,40 @@ if st.sidebar.button("Cerrar sesión", use_container_width=True):
     st.session_state.clear()
     st.rerun()
 
+if account_role == "ASISTENTE" and st.session_state.get("assistant_entry_module"):
+    if st.sidebar.button("Volver al inicio", use_container_width=True):
+        st.session_state.pop("assistant_entry_module", None)
+        st.session_state.pop("main_navigation_ASISTENTE", None)
+        if global_operation_access:
+            st.session_state.pop("selected_operation", None)
+        st.rerun()
+
+if account_role == "ASISTENTE" and not st.session_state.get("assistant_entry_module"):
+    st.title("Inicio")
+    st.caption("Selecciona el módulo al que deseas ingresar.")
+    modules = [
+        ("Planificación", "Consulta lo programado para la jornada."),
+        ("Operaciones", "Ingresa y registra la ejecución del turno."),
+        ("Reportes", "Revisa resultados e incidencias."),
+    ]
+    for column, (module, description) in zip(st.columns(3), modules):
+        with column.container(border=True):
+            st.subheader(module)
+            st.caption(description)
+            if st.button(
+                "Ingresar", key=f"enter_module_{module}",
+                type="primary", use_container_width=True,
+            ):
+                st.session_state["assistant_entry_module"] = module
+                st.session_state["main_navigation_ASISTENTE"] = module
+                if global_operation_access:
+                    if module == "Operaciones":
+                        st.session_state.pop("selected_operation", None)
+                    elif not st.session_state.get("selected_operation"):
+                        st.session_state["selected_operation"] = user_operation
+                st.rerun()
+    st.stop()
+
 if role in ("ASISTENTE", "SUPERVISOR") and not global_operation_access:
     st.session_state["selected_operation"] = user_operation
 
@@ -374,7 +408,7 @@ if account_role == "JEFATURA":
         st.sidebar.info(f"Modo de pruebas: {selected_mode}")
 
 sections = {
-    "ASISTENTE": ["Inicio", "Planificación", "Operaciones", "Reportes"],
+    "ASISTENTE": ["Planificación", "Operaciones", "Reportes"],
     "SUPERVISOR": ["Dashboard", "Planificación", "Operaciones", "Reportes"],
     "JEFATURA": ["Dashboard", "Planificación", "Reportes", "Administración"],
 }
@@ -382,10 +416,16 @@ if role not in sections:
     st.error("El rol de este usuario no está configurado correctamente.")
     st.stop()
 
+navigation_key = f"main_navigation_{role}"
+if role == "ASISTENTE":
+    requested_section = st.session_state.get("assistant_entry_module", "Planificación")
+    if st.session_state.get(navigation_key) not in sections[role]:
+        st.session_state[navigation_key] = requested_section
+
 section = st.sidebar.radio(
     "Menú",
     sections[role],
-    key=f"main_navigation_{role}",
+    key=navigation_key,
 )
 page = section
 
