@@ -625,10 +625,29 @@ else:
 
 page = section
 if role == "ASISTENTE" and section == "Operaciones":
-    page = st.radio(
-        "Acción", ["Abrir turno", "Operación", "Cerrar turno"],
-        horizontal=True, key="assistant_operation_action",
-    )
+    assistant_active_data = frame(T["turnos"], {"asistente_id": user_id})
+    if not assistant_active_data.empty and "responsable_operacion" in assistant_active_data:
+        operation_names = [operation["name"] for operation in OPERACIONES]
+        operation_values = assistant_active_data["responsable_operacion"].fillna("").astype(str)
+        if selected_operation == "Lavado de jabas":
+            assistant_active_data = assistant_active_data[
+                (operation_values == selected_operation) | (~operation_values.isin(operation_names))
+            ]
+        else:
+            assistant_active_data = assistant_active_data[operation_values == selected_operation]
+    if not assistant_active_data.empty:
+        assistant_active_data = assistant_active_data[
+            assistant_active_data["estado"].isin(["ABIERTO", "CONFIRMADO", "CERRADO"])
+        ]
+    close_mode_key = f"assistant_close_mode_{user_id}_{selected_operation}"
+    if not assistant_active_data.empty and (assistant_active_data["estado"] == "CONFIRMADO").any():
+        page = "Cerrar turno" if st.session_state.get(close_mode_key) else "Operación"
+    elif not assistant_active_data.empty and (assistant_active_data["estado"] == "ABIERTO").any():
+        page = "Abrir turno"
+    elif not assistant_active_data.empty and (assistant_active_data["estado"] == "CERRADO").any():
+        page = "Cerrar turno"
+    else:
+        page = "Abrir turno"
 elif role == "SUPERVISOR":
     if section == "Dashboard":
         page = "Panel"
@@ -996,17 +1015,36 @@ elif role == "ASISTENTE" and page == "Inicio":
 elif role == "ASISTENTE" and page == "Abrir turno":
     st.title("Abrir turno")
     opening_result_key = f"opening_result_{user_id}_{selected_operation}"
-    if st.session_state.get(opening_result_key):
-        result = st.session_state[opening_result_key]
-        st.success("Apertura enviada correctamente al supervisor.")
-        st.info(
-            f"Fecha: {result['fecha']} · Turno: {result['turno']} · "
-            f"Estado: {STATUS_LABELS.get(result['estado'], result['estado'])}"
+    pending_opening = assistant_active_data[
+        assistant_active_data["estado"] == "ABIERTO"
+    ].head(1) if not assistant_active_data.empty else pd.DataFrame()
+    if not pending_opening.empty:
+        turn = pending_opening.iloc[0]
+        turn_id = str(turn["id"])
+        st.subheader("Turno enviado al supervisor")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Fecha", str(turn.get("fecha", "")))
+        c2.metric("Turno", shift_label_for_row(turn))
+        c3.metric(
+            "Horario",
+            f"{str(turn.get('hora_programada_inicio', ''))[:5]} – "
+            f"{str(turn.get('hora_programada_fin', ''))[:5]}",
         )
-        st.warning("No es necesario volver a enviarla. Espera la confirmación del supervisor.")
-        if st.button("Registrar otra apertura", use_container_width=True):
-            st.session_state.pop(opening_result_key, None)
-            st.rerun()
+        c4.metric("Estado", STATUS_LABELS.get(str(turn.get("estado")), str(turn.get("estado"))))
+
+        personal = frame(T["personal"], {"turno_id": turn_id})
+        if not personal.empty:
+            st.markdown("#### Personal enviado")
+            personal_view = personal[["labor", "cantidad_personas"]].rename(columns={
+                "labor": "Labor o integrante", "cantidad_personas": "Personal",
+            })
+            st.dataframe(personal_view, width="stretch", hide_index=True)
+
+        observation = str(turn.get("observacion_apertura") or "").strip()
+        if observation:
+            with st.expander("Ver detalle enviado"):
+                st.write(observation)
+        st.info("Pendiente de confirmación del supervisor.")
         st.stop()
     with st.form("open"):
         c1, c2 = st.columns(2)
@@ -1419,8 +1457,30 @@ elif role == "ASISTENTE" and page == "Operación":
                         })
                     st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
+        st.divider()
+        if st.button("Continuar al cierre del turno", type="primary", use_container_width=True):
+            st.session_state[f"assistant_close_mode_{user_id}_{selected_operation}"] = True
+            st.rerun()
+
 elif role == "ASISTENTE" and page == "Cerrar turno":
     st.title("Cerrar turno")
+    submitted_closure = assistant_active_data[
+        assistant_active_data["estado"] == "CERRADO"
+    ].head(1) if not assistant_active_data.empty else pd.DataFrame()
+    if not submitted_closure.empty:
+        turn = submitted_closure.iloc[0]
+        turn_id = str(turn["id"])
+        st.subheader("Cierre enviado al supervisor")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Fecha", str(turn.get("fecha", "")))
+        c2.metric("Turno", shift_label_for_row(turn))
+        c3.metric("Estado", STATUS_LABELS.get(str(turn.get("estado")), str(turn.get("estado"))))
+        production = frame(T["prod"], {"turno_id": turn_id})
+        if not production.empty:
+            result_label = RESULT_LABELS[selected_operation]
+            st.metric(result_label, f"{int(production.iloc[0].get('jabas_lavadas', 0) or 0):,}")
+        st.info("Pendiente de validación del supervisor.")
+        st.stop()
     turn_id = choose_turn(["CONFIRMADO"], user_id)
     if turn_id is None:
         st.info("No hay turnos disponibles.")
@@ -1465,7 +1525,8 @@ elif role == "ASISTENTE" and page == "Cerrar turno":
                      {"id": turn_id})
                 audit("turnos", turn_id, "estado", "CONFIRMADO", "CERRADO",
                       f"{result_label}: {result_quantity}", user_id)
-                st.success("Cierre enviado al supervisor.")
+                st.session_state.pop(f"assistant_close_mode_{user_id}_{selected_operation}", None)
+                st.rerun()
 
 elif role == "SUPERVISOR" and page == "Planificación":
     render_planning_view()
