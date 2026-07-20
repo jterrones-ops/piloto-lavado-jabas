@@ -297,10 +297,14 @@ def main() -> None:
         "observacion_apertura", f"%{marker}%"
     ).execute().data or []
     if existing:
-        summary = verify(client, marker)
-        print("EL LOTE YA EXISTE Y FUE VALIDADO; NO SE DUPLICÓ.")
-        print(json.dumps(summary, ensure_ascii=False, indent=2))
-        return
+        try:
+            summary = verify(client, marker)
+            print("EL LOTE YA EXISTE Y FUE VALIDADO; NO SE DUPLICÓ.")
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+            return
+        except Exception:
+            deleted = cleanup(client, marker)
+            print(f"Se eliminaron {deleted} turnos incompletos antes de reiniciar el lote.")
 
     assistant_id, supervisor_id = active_test_users(client)
     failures = []
