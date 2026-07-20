@@ -981,12 +981,21 @@ elif role == "SUPERVISOR" and page == "Seguimiento":
         incidents = frame(T["inc"], {"turno_id": turn_id})
         transfers = frame(T["tras"], {"turno_id": turn_id})
         st.subheader("Incidencias")
-        if not incidents.empty:\n            st.dataframe(incident_summary(incidents), width="stretch", hide_index=True)\n        else:\n            st.info("Sin incidencias.")
+        if not incidents.empty:
+            st.dataframe(incident_summary(incidents), width="stretch", hide_index=True)
+        else:
+            st.info("Sin incidencias.")
         st.subheader("Traslados")
-        if not transfers.empty:\n            st.dataframe(transfer_summary(transfers), width="stretch", hide_index=True)\n        else:\n            st.info("Sin traslados.")
+        if not transfers.empty:
+            st.dataframe(transfer_summary(transfers), width="stretch", hide_index=True)
+        else:
+            st.info("Sin traslados.")
         with st.expander("Ver detalle de auditoría"):
             audit_data = frame(T["audit"], {"registro_id": turn_id})
-            if not audit_data.empty:\n                st.dataframe(audit_data, width="stretch", hide_index=True)\n            else:\n                st.info("Sin movimientos de auditoría.")
+            if not audit_data.empty:
+                st.dataframe(audit_data, width="stretch", hide_index=True)
+            else:
+                st.info("Sin movimientos de auditoría.")
 
 elif role == "SUPERVISOR" and page == "Validar cierre":
     st.title("Validar cierre")
@@ -1150,11 +1159,17 @@ elif role == "JEFATURA":
         else:
             turn_ids = set(turns["id"].astype(str))
             incidents = incidents[incidents["turno_id"].astype(str).isin(turn_ids)]
-            if not incidents.empty:\n                st.dataframe(incident_summary(incidents), width="stretch", hide_index=True)\n            else:\n                st.info("Sin incidencias registradas en esta operación.")
+            if not incidents.empty:
+                st.dataframe(incident_summary(incidents), width="stretch", hide_index=True)
+            else:
+                st.info("Sin incidencias registradas en esta operación.")
     else:
         data = frame(T["audit"])
         st.caption("Detalle técnico reservado para trazabilidad y revisión.")
-        if not data.empty:\n            st.dataframe(data, width="stretch", hide_index=True)\n        else:\n            st.info("Sin datos para reporte.")
+        if not data.empty:
+            st.dataframe(data, width="stretch", hide_index=True)
+        else:
+            st.info("Sin datos para reporte.")
 
 st.divider()
 st.caption("Control de Operaciones Logísticas ")
