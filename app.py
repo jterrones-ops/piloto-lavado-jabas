@@ -434,72 +434,94 @@ def plan_status(operation_data, planned_people, actual_people, incident_count=0)
     return "Fuera de lo planificado", "red"
 
 
+def render_management_quick_navigation():
+    spacer, planning, reports, administration = st.columns([5, 1.4, 1.2, 1.5])
+    with planning:
+        if st.button("Planificación", use_container_width=True, key="management_nav_planning"):
+            st.session_state["current_section_JEFATURA"] = "Planificación"
+            st.rerun()
+    with reports:
+        if st.button("Reportes", use_container_width=True, key="management_nav_reports"):
+            st.session_state["current_section_JEFATURA"] = "Reportes"
+            st.rerun()
+    with administration:
+        if st.button("Administración", use_container_width=True, key="management_nav_admin"):
+            st.session_state["current_section_JEFATURA"] = "Administración"
+            st.rerun()
+
+
 def render_management_budget_demo():
-    """Jefatura-only preview of the agreed washing budget comparison."""
+    """Full consolidated Jefatura preview using fictitious, non-persistent values."""
     st.info("Vista de prueba ficticia · Solo visible para Jefatura · No guarda datos")
 
-    daily_jabas = 90000
-    planned_white = int(daily_jabas * 0.40)
-    planned_red = int(daily_jabas * 0.10)
-    planned_total = planned_white + planned_red
-    planned_people = int((planned_white / 1500) + (planned_red / 500) + 0.5)
-    planned_cost = planned_people * 26.47
+    st.subheader("Resumen general del día")
+    headline_values = [
+        ("Jabas recibidas", "92,500"),
+        ("Jabas a packing", "61,200"),
+        ("Jabas lavadas", "42,500"),
+        ("Personal del día", "128"),
+        ("Incidencias abiertas", "3"),
+    ]
+    for column, (label, value) in zip(st.columns(5), headline_values):
+        column.metric(label, value)
 
-    actual_white = 34000
-    actual_red = 8500
-    actual_total = actual_white + actual_red
-    actual_people = 44
-    actual_cost = actual_people * 26.47
-    compliance = actual_total / planned_total if planned_total else 0
+    st.subheader("Estado de las operaciones")
+    operation_cards = [
+        {
+            "name": "Lavado de jabas", "status": "En riesgo", "color": "orange",
+            "metrics": [("Plan", "45,000"), ("Real", "42,500"),
+                        ("Cumplimiento", "94.4%"), ("Personal", "44")],
+        },
+        {
+            "name": "Distribución de jabas", "status": "Dentro del plan", "color": "green",
+            "metrics": [("Jabas distribuidas", "78,400"), ("Personal", "26"), ("Turnos", "3")],
+        },
+        {
+            "name": "Luminarias", "status": "Dentro del plan", "color": "green",
+            "metrics": [("Entregadas", "320"), ("Recibidas", "305"),
+                        ("Mal estado", "6"), ("Personal", "18")],
+        },
+        {
+            "name": "Acarreo de fruta", "status": "En ejecución", "color": "blue",
+            "metrics": [("Viajes", "48"), ("Tractores", "7"),
+                        ("Motofurgones", "3"), ("Personal", "21")],
+        },
+        {
+            "name": "Acopios", "status": "En ejecución", "color": "blue",
+            "metrics": [("Recepciones", "36"), ("Viajes a packing", "22"),
+                        ("Stock", "31,300"), ("Personal", "19")],
+        },
+    ]
+    for column, card in zip(st.columns(5), operation_cards):
+        with column.container(border=True):
+            st.markdown(f"**{card['name']}**")
+            if card["color"] == "green":
+                st.success(card["status"])
+            elif card["color"] == "orange":
+                st.warning(card["status"])
+            else:
+                st.info(card["status"])
+            for label, value in card["metrics"]:
+                st.metric(label, value)
+            if st.button(
+                "Ver reporte", key=f"demo_report_{card['name']}", use_container_width=True
+            ):
+                st.session_state["management_report_operation"] = card["name"]
+                st.session_state["current_section_JEFATURA"] = "Reportes"
+                st.rerun()
 
-    st.subheader("Lavado de jabas · Presupuesto frente a ejecución")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Jabas del plan diario", f"{daily_jabas:,}")
-    c2.metric("Planificadas para lavar", f"{planned_total:,}")
-    c3.metric("Lavadas realmente", f"{actual_total:,}", f"{actual_total - planned_total:,}")
-    c4.metric("Cumplimiento", f"{compliance:.1%}", f"{compliance - 1:.1%}")
-
+    st.subheader("Resumen presupuesto vs. real · Solo Jefatura")
     comparison = pd.DataFrame([
-        {
-            "Indicador": "Jabas blancas",
-            "Presupuesto": f"{planned_white:,}",
-            "Real": f"{actual_white:,}",
-            "Diferencia": f"{actual_white - planned_white:,}",
-            "Estado": "Bajo el plan",
-        },
-        {
-            "Indicador": "Jabas rojas",
-            "Presupuesto": f"{planned_red:,}",
-            "Real": f"{actual_red:,}",
-            "Diferencia": f"{actual_red - planned_red:,}",
-            "Estado": "Bajo el plan",
-        },
-        {
-            "Indicador": "Total lavado",
-            "Presupuesto": f"{planned_total:,}",
-            "Real": f"{actual_total:,}",
-            "Diferencia": f"{actual_total - planned_total:,}",
-            "Estado": f"{compliance:.1%} de cumplimiento",
-        },
-        {
-            "Indicador": "Personal",
-            "Presupuesto": str(planned_people),
-            "Real": str(actual_people),
-            "Diferencia": f"+{actual_people - planned_people}",
-            "Estado": "Sobre el plan",
-        },
-        {
-            "Indicador": "Costo de personal",
-            "Presupuesto": f"US${planned_cost:,.2f}",
-            "Real": f"US${actual_cost:,.2f}",
-            "Diferencia": f"+US${actual_cost - planned_cost:,.2f}",
-            "Estado": "Sobre el presupuesto",
-        },
-    ])
+        ["Lavado de jabas", "US$1,111.74", "US$1,164.68", "+US$52.94", "Desviación"],
+        ["Distribución de jabas", "US$832.50", "US$815.20", "-US$17.30", "Dentro del plan"],
+        ["Luminarias", "US$642.80", "US$636.10", "-US$6.70", "Dentro del plan"],
+        ["Acarreo de fruta", "US$1,255.60", "US$1,228.45", "-US$27.15", "Dentro del plan"],
+        ["Acopios", "US$903.40", "US$915.85", "+US$12.45", "Desviación"],
+    ], columns=["Proceso", "Plan", "Real", "Diferencia", "Estado"])
     st.dataframe(comparison, width="stretch", hide_index=True)
     st.caption(
-        "Reglas aplicadas: 40% blancas, 10% rojas, rendimientos de 1,500 y 500 "
-        "jabas por jornada, redondeo convencional y US$26.47 por persona/jornada."
+        "Montos expresados en dólares estadounidenses (USD). En Lavado se aplican 40% "
+        "de jabas blancas, 10% de rojas y US$26.47 por persona/jornada."
     )
 
 
@@ -1817,9 +1839,10 @@ elif role == "JEFATURA":
     today_text = str(datetime.now(LIMA).date())
     st.title("Dashboard consolidado")
     st.caption(f"Resumen operativo de todos los procesos · {datetime.now(LIMA).strftime('%d/%m/%Y')}")
-    if st.toggle("Mostrar prueba ficticia de Lavado", value=True, key="management_budget_demo"):
+    render_management_quick_navigation()
+    if st.toggle("Mostrar prueba ficticia consolidada", value=True, key="management_budget_demo"):
         render_management_budget_demo()
-        st.divider()
+        st.stop()
     data = paged_frame(T["turnos"], {"fecha": today_text})
     if not data.empty and "observacion_apertura" in data:
         data = data[
@@ -1878,8 +1901,6 @@ elif role == "JEFATURA":
         f"{reception_count} recepciones · {packing_trips} viajes", delta_color="off"
     )
     c4.metric("Incidencias abiertas", open_incidents)
-
-    render_module_cards(role)
 
     st.subheader("Estado por proceso")
     st.caption("La evaluación compara el personal registrado con la planificación diaria de Jefatura.")
