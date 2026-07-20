@@ -515,8 +515,10 @@ def render_management_budget_demo():
         .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
         .operation-card {min-height: auto;}
     }
+    .block-container {max-width: 1800px; padding-top: 2.2rem;}
     </style>
-    <div class="demo-note">Vista de prueba ficticia · Solo visible para Jefatura · No guarda datos</div>
+    <div class="demo-note"><strong>Dashboard consolidado v3</strong> · Vista ficticia dinámica ·
+    Solo visible para Jefatura · No guarda datos</div>
     """, unsafe_allow_html=True)
 
     st.markdown('<div class="dashboard-section-title">Resumen general del día</div>',
@@ -1926,7 +1928,13 @@ elif role == "JEFATURA":
     st.title("Dashboard consolidado")
     st.caption(f"Resumen operativo de todos los procesos · {datetime.now(LIMA).strftime('%d/%m/%Y')}")
     render_management_quick_navigation()
-    if st.toggle("Mostrar prueba ficticia consolidada", value=True, key="management_budget_demo"):
+    management_view = st.radio(
+        "Vista del Dashboard",
+        ["Diseño consolidado", "Datos reales"],
+        horizontal=True,
+        key="management_dashboard_view_v3",
+    )
+    if management_view == "Diseño consolidado":
         render_management_budget_demo()
         st.stop()
     data = paged_frame(T["turnos"], {"fecha": today_text})
