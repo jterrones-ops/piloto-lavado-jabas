@@ -4,11 +4,13 @@ import hashlib
 import hmac
 import json
 from time import sleep
+from urllib.parse import quote
 from uuid import uuid4
 
 import bcrypt
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from supabase import create_client
 
 st.set_page_config(
@@ -450,6 +452,142 @@ def render_management_quick_navigation():
             st.rerun()
 
 
+def render_management_dashboard_component():
+    """Render the consolidated mockup in an isolated component for exact styling."""
+    report_links = {
+        operation: f"?section=Reportes&operation={quote(operation)}"
+        for operation in [item["name"] for item in OPERACIONES]
+    }
+    dashboard_date = datetime.now(LIMA).strftime("%d/%m/%Y")
+    html = f"""
+    <!doctype html>
+    <html lang="es">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      * {{ box-sizing: border-box; }}
+      body {{ margin: 0; background: #f7f9fc; color: #13233d;
+              font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+              "Segoe UI", sans-serif; }}
+      .shell {{ width: 100%; padding: 8px 10px 18px; }}
+      .top {{ display: flex; align-items: center; justify-content: space-between;
+              gap: 18px; margin-bottom: 18px; }}
+      .title-wrap {{ display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }}
+      h1 {{ margin: 0; font-size: 34px; line-height: 1.1; letter-spacing: -.6px; }}
+      .date {{ color: #667085; font-size: 15px; }}
+      .nav {{ display: flex; gap: 10px; flex-wrap: wrap; }}
+      .nav a, .report {{ color: #16345d; background: #fff; border: 1px solid #cbd5e1;
+                        border-radius: 8px; padding: 10px 15px; text-decoration: none;
+                        font-size: 14px; font-weight: 650; }}
+      .nav a:hover, .report:hover {{ background: #eff6ff; border-color: #60a5fa; }}
+      .notice {{ color: #075985; background: #e0f2fe; border: 1px solid #bae6fd;
+                 border-radius: 9px; padding: 9px 12px; margin-bottom: 16px; font-size: 13px; }}
+      .kpis {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+               gap: 13px; margin-bottom: 22px; }}
+      .kpi {{ background: #fff; border: 1px solid #dce4ef; border-radius: 13px;
+              padding: 17px 18px; box-shadow: 0 3px 10px rgba(25, 45, 75, .05); }}
+      .kpi-label {{ color: #637087; font-size: 13px; margin-bottom: 7px; }}
+      .kpi-value {{ color: #10213d; font-size: 31px; font-weight: 800; line-height: 1; }}
+      .danger {{ color: #dc2626; }}
+      h2 {{ margin: 0 0 12px; font-size: 22px; }}
+      .operations {{ display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+                     gap: 13px; margin-bottom: 24px; }}
+      .card {{ display: flex; flex-direction: column; min-height: 312px; background: #fff;
+               border: 1px solid #dce4ef; border-radius: 13px; padding: 15px;
+               box-shadow: 0 3px 10px rgba(25, 45, 75, .045); }}
+      .card-title {{ min-height: 46px; font-size: 17px; font-weight: 780; }}
+      .pill {{ align-self: flex-start; border-radius: 7px; padding: 5px 9px;
+               font-size: 12px; font-weight: 700; margin-bottom: 9px; }}
+      .green {{ color: #166534; background: #dcfce7; border: 1px solid #86efac; }}
+      .orange {{ color: #9a5a00; background: #fff7d6; border: 1px solid #f5c451; }}
+      .blue {{ color: #0755a5; background: #e7f2ff; border: 1px solid #93c5fd; }}
+      .row {{ display: flex; justify-content: space-between; gap: 9px; padding: 8px 0;
+              color: #5d6a7f; font-size: 13px; border-bottom: 1px solid #edf1f6; }}
+      .row b {{ color: #13233d; font-size: 14px; }}
+      .bar {{ height: 7px; background: #e9eef5; border-radius: 999px; overflow: hidden;
+              margin: 12px 0 5px; }}
+      .bar span {{ display: block; height: 100%; width: 94.4%; background: #f2a900; }}
+      .progress-label {{ color: #7a8799; font-size: 11px; margin-bottom: 11px; }}
+      .report {{ display: block; text-align: center; margin-top: auto; padding: 8px; color: #0755a5;
+                 border-color: #60a5fa; }}
+      .table-wrap {{ overflow-x: auto; background: #fff; border: 1px solid #dce4ef;
+                     border-radius: 12px; }}
+      table {{ width: 100%; min-width: 820px; border-collapse: collapse; }}
+      th {{ text-align: left; background: #f2f5f9; color: #34425a; font-size: 13px;
+            padding: 10px 12px; }}
+      td {{ color: #34425a; font-size: 13px; padding: 9px 12px;
+            border-top: 1px solid #edf1f6; }}
+      .up {{ color: #dc2626; font-weight: 750; }}
+      .down {{ color: #15803d; font-weight: 750; }}
+      .foot {{ color: #7b8798; font-size: 11px; padding: 9px 3px 0; }}
+      @media (max-width: 1180px) {{
+        .kpis {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+        .operations {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+        .top {{ align-items: flex-start; flex-direction: column; }}
+      }}
+    </style>
+    </head>
+    <body>
+    <main class="shell">
+      <header class="top">
+        <div class="title-wrap"><h1>Dashboard consolidado</h1><span class="date">{dashboard_date}</span></div>
+        <nav class="nav">
+          <a target="_parent" href="?section=Planificaci%C3%B3n">Planificación</a>
+          <a target="_parent" href="?section=Reportes">Reportes</a>
+          <a target="_parent" href="?section=Administraci%C3%B3n">Administración</a>
+        </nav>
+      </header>
+      <div class="notice"><b>Dashboard consolidado v4</b> · Vista dinámica de diseño ·
+      Solo visible para Jefatura · Los valores mostrados son ficticios ·
+      <a target="_parent" href="?view=real">Ver datos reales</a></div>
+      <section class="kpis">
+        <article class="kpi"><div class="kpi-label">Jabas recibidas</div><div class="kpi-value">92,500</div></article>
+        <article class="kpi"><div class="kpi-label">Jabas a packing</div><div class="kpi-value">61,200</div></article>
+        <article class="kpi"><div class="kpi-label">Jabas lavadas</div><div class="kpi-value">42,500</div></article>
+        <article class="kpi"><div class="kpi-label">Personal del día</div><div class="kpi-value">128</div></article>
+        <article class="kpi"><div class="kpi-label">Incidencias abiertas</div><div class="kpi-value danger">3</div></article>
+      </section>
+      <h2>Estado de las operaciones</h2>
+      <section class="operations">
+        <article class="card"><div class="card-title">1. Lavado de jabas</div><span class="pill orange">En riesgo</span>
+          <div class="row"><span>Plan</span><b>45,000</b></div><div class="row"><span>Real</span><b>42,500</b></div>
+          <div class="row"><span>Cumplimiento</span><b>94.4%</b></div><div class="row"><span>Personal</span><b>44</b></div>
+          <div class="bar"><span></span></div><div class="progress-label">Cumplimiento del plan · 94.4%</div>
+          <a class="report" target="_parent" href="{report_links['Lavado de jabas']}">Ver reporte</a></article>
+        <article class="card"><div class="card-title">2. Distribución de jabas</div><span class="pill green">Dentro del plan</span>
+          <div class="row"><span>Jabas distribuidas</span><b>78,400</b></div><div class="row"><span>Personal</span><b>26</b></div>
+          <div class="row"><span>Turnos</span><b>3</b></div>
+          <a class="report" target="_parent" href="{report_links['Distribución de jabas']}">Ver reporte</a></article>
+        <article class="card"><div class="card-title">3. Luminarias</div><span class="pill green">Dentro del plan</span>
+          <div class="row"><span>Entregadas</span><b>320</b></div><div class="row"><span>Recibidas</span><b>305</b></div>
+          <div class="row"><span>Mal estado</span><b class="danger">6</b></div><div class="row"><span>Personal</span><b>18</b></div>
+          <a class="report" target="_parent" href="{report_links['Luminarias']}">Ver reporte</a></article>
+        <article class="card"><div class="card-title">4. Acarreo de fruta</div><span class="pill blue">En ejecución</span>
+          <div class="row"><span>Viajes</span><b>48</b></div><div class="row"><span>Tractores</span><b>7</b></div>
+          <div class="row"><span>Motofurgones</span><b>3</b></div><div class="row"><span>Personal</span><b>21</b></div>
+          <a class="report" target="_parent" href="{report_links['Acarreo de fruta']}">Ver reporte</a></article>
+        <article class="card"><div class="card-title">5. Acopios</div><span class="pill blue">En ejecución</span>
+          <div class="row"><span>Recepciones</span><b>36</b></div><div class="row"><span>Viajes a packing</span><b>22</b></div>
+          <div class="row"><span>Stock</span><b>31,300</b></div><div class="row"><span>Personal</span><b>19</b></div>
+          <a class="report" target="_parent" href="{report_links['Acopios']}">Ver reporte</a></article>
+      </section>
+      <h2>Resumen presupuesto vs. real · Solo Jefatura</h2>
+      <div class="table-wrap"><table><thead><tr><th>Proceso</th><th>Plan</th><th>Real</th><th>Diferencia</th><th>Estado</th></tr></thead>
+      <tbody>
+        <tr><td>Lavado de jabas</td><td>US$1,111.74</td><td>US$1,164.68</td><td class="up">+US$52.94</td><td>Desviación</td></tr>
+        <tr><td>Distribución de jabas</td><td>US$832.50</td><td>US$815.20</td><td class="down">-US$17.30</td><td>Dentro del plan</td></tr>
+        <tr><td>Luminarias</td><td>US$642.80</td><td>US$636.10</td><td class="down">-US$6.70</td><td>Dentro del plan</td></tr>
+        <tr><td>Acarreo de fruta</td><td>US$1,255.60</td><td>US$1,228.45</td><td class="down">-US$27.15</td><td>Dentro del plan</td></tr>
+        <tr><td>Acopios</td><td>US$903.40</td><td>US$915.85</td><td class="up">+US$12.45</td><td>Desviación</td></tr>
+      </tbody></table></div>
+      <div class="foot">Montos expresados en dólares estadounidenses (USD).</div>
+    </main>
+    </body></html>
+    """
+    components.html(html, height=875, scrolling=True)
+
+
 def render_management_budget_demo():
     """Full consolidated Jefatura preview using fictitious, non-persistent values."""
     st.markdown("""
@@ -789,6 +927,34 @@ sections = {
 if role not in sections:
     st.error("El rol de este usuario no está configurado correctamente.")
     st.stop()
+
+
+def query_value(name):
+    if hasattr(st, "query_params"):
+        value = st.query_params.get(name)
+    else:
+        value = st.experimental_get_query_params().get(name)
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def clear_query_values():
+    if hasattr(st, "query_params"):
+        st.query_params.clear()
+    else:
+        st.experimental_set_query_params()
+
+
+if role == "JEFATURA":
+    requested_section = query_value("section")
+    if requested_section in sections["JEFATURA"]:
+        requested_operation = query_value("operation")
+        if requested_operation in [item["name"] for item in OPERACIONES]:
+            st.session_state["management_report_operation"] = requested_operation
+        st.session_state["current_section_JEFATURA"] = requested_section
+        clear_query_values()
+        st.rerun()
 
 navigation_key = f"current_section_{role}"
 if role == "ASISTENTE":
@@ -1925,18 +2091,13 @@ elif role == "JEFATURA" and page == "Reportes":
 
 elif role == "JEFATURA":
     today_text = str(datetime.now(LIMA).date())
+    if query_value("view") != "real":
+        render_management_dashboard_component()
+        st.stop()
     st.title("Dashboard consolidado")
     st.caption(f"Resumen operativo de todos los procesos · {datetime.now(LIMA).strftime('%d/%m/%Y')}")
     render_management_quick_navigation()
-    management_view = st.radio(
-        "Vista del Dashboard",
-        ["Diseño consolidado", "Datos reales"],
-        horizontal=True,
-        key="management_dashboard_view_v3",
-    )
-    if management_view == "Diseño consolidado":
-        render_management_budget_demo()
-        st.stop()
+    st.link_button("Volver al diseño consolidado", "?", use_container_width=True)
     data = paged_frame(T["turnos"], {"fecha": today_text})
     if not data.empty and "observacion_apertura" in data:
         data = data[
