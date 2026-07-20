@@ -1,0 +1,33 @@
+name: Carga real controlada
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/carga-real-controlada.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: carga-real-controlada
+  cancel-in-progress: false
+
+jobs:
+  cargar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+      - name: Ejecutar carga real identificada
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          LOAD_TEST_BATCH: loadtest-20260720-001
+          LOAD_TEST_ACTION: load
+        run: python tools/load_supabase_test.py
