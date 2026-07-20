@@ -1,4 +1,5 @@
 name: Crear usuarios por operación
+# Incluye la cuenta global de pruebas.
 
 on:
   push:
