@@ -414,19 +414,19 @@ if role not in sections:
     st.error("El rol de este usuario no está configurado correctamente.")
     st.stop()
 
-navigation_key = f"main_navigation_{role}"
+navigation_key = f"current_section_{role}"
 if role == "ASISTENTE":
-    requested_section = st.session_state.get("assistant_entry_module", "Planificación")
+    section = st.session_state.get("assistant_entry_module", "Planificación")
+else:
     if st.session_state.get(navigation_key) not in sections[role]:
-        st.session_state[navigation_key] = requested_section
+        st.session_state[navigation_key] = "Dashboard"
+    section = st.session_state[navigation_key]
+    if section != "Dashboard":
+        if st.sidebar.button("Volver al Dashboard", use_container_width=True):
+            st.session_state[navigation_key] = "Dashboard"
+            st.rerun()
 
-section = st.sidebar.radio(
-    "Menú",
-    sections[role],
-    key=navigation_key,
-)
 page = section
-
 if role == "ASISTENTE" and section == "Operaciones":
     page = st.radio(
         "Acción", ["Abrir turno", "Operación", "Cerrar turno"],
@@ -616,11 +616,22 @@ def render_module_cards(current_role):
             ("Operaciones", "Registra y controla la ejecución del turno."),
             ("Reportes", "Revisa resultados e incidencias."),
         ]
-    for column, (title, description) in zip(st.columns(3), items):
+    for index, (column, (title, description)) in enumerate(zip(st.columns(3), items)):
         with column.container(border=True):
             st.subheader(title)
             st.caption(description)
-
+            if st.button(
+                "Ingresar",
+                key=f"dashboard_module_{current_role}_{index}",
+                type="primary",
+                use_container_width=True,
+            ):
+                if current_role == "ASISTENTE":
+                    st.session_state["assistant_entry_module"] = title
+                    st.session_state["main_navigation_ASISTENTE"] = title
+                else:
+                    st.session_state[f"current_section_{current_role}"] = title
+                st.rerun()
 
 def render_planning_view():
     if role == "JEFATURA":
