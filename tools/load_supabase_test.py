@@ -258,6 +258,12 @@ def main() -> None:
     marker = f"PRUEBA_CARGA:{batch}"
     client = create_client(url, key)
 
+    if action == "verify":
+        summary = verify(client, marker)
+        print("VERIFICACION DEL LOTE COMPLETA")
+        print(f"LOTE: {batch}")
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return
     if action == "cleanup":
         deleted = cleanup(client, marker)
         print(f"LIMPIEZA COMPLETA: lote={batch}, turnos_eliminados={deleted}")
