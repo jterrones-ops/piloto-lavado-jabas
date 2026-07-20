@@ -452,9 +452,75 @@ def render_management_quick_navigation():
 
 def render_management_budget_demo():
     """Full consolidated Jefatura preview using fictitious, non-persistent values."""
-    st.info("Vista de prueba ficticia · Solo visible para Jefatura · No guarda datos")
+    st.markdown("""
+    <style>
+    .demo-note {
+        padding: .75rem 1rem; border-radius: .7rem; margin: .4rem 0 1.1rem;
+        color: #075985; background: #e0f2fe; border: 1px solid #bae6fd;
+        font-size: .92rem;
+    }
+    .dashboard-section-title {
+        color: #13233d; font-size: 1.35rem; font-weight: 750;
+        margin: 1.35rem 0 .7rem;
+    }
+    .kpi-grid {
+        display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: .85rem; margin-bottom: 1.35rem;
+    }
+    .kpi-card {
+        background: #ffffff; border: 1px solid #dbe3ee; border-radius: .85rem;
+        padding: 1rem 1.05rem; box-shadow: 0 2px 7px rgba(15, 35, 65, .05);
+    }
+    .kpi-label {color: #536176; font-size: .87rem; margin-bottom: .3rem;}
+    .kpi-value {color: #10213d; font-size: 2rem; font-weight: 780; line-height: 1.05;}
+    .kpi-danger .kpi-value {color: #dc2626;}
+    .operation-card {
+        min-height: 19rem; background: #fff; border: 1px solid #dbe3ee;
+        border-radius: .85rem; padding: .9rem .95rem .7rem;
+        box-shadow: 0 2px 7px rgba(15, 35, 65, .045);
+    }
+    .operation-title {
+        color: #13233d; font-size: 1.02rem; font-weight: 750;
+        min-height: 2.6rem; margin-bottom: .45rem;
+    }
+    .status-pill {
+        display: inline-block; padding: .22rem .62rem; border-radius: .45rem;
+        font-size: .78rem; font-weight: 650; margin-bottom: .65rem;
+    }
+    .status-green {color: #166534; background: #dcfce7; border: 1px solid #86efac;}
+    .status-orange {color: #9a5a00; background: #fff7d6; border: 1px solid #f5c451;}
+    .status-blue {color: #0755a5; background: #e7f2ff; border: 1px solid #93c5fd;}
+    .metric-row {
+        display: flex; justify-content: space-between; gap: .65rem;
+        padding: .47rem 0; border-bottom: 1px solid #edf1f6;
+        color: #526075; font-size: .85rem;
+    }
+    .metric-row strong {color: #15243d; font-size: .9rem;}
+    .budget-table-wrap {
+        overflow-x: auto; background: white; border: 1px solid #dbe3ee;
+        border-radius: .8rem; margin-top: .3rem;
+    }
+    .budget-table {border-collapse: collapse; width: 100%; min-width: 760px;}
+    .budget-table th {
+        text-align: left; color: #26364f; background: #f4f7fb;
+        padding: .7rem .8rem; font-size: .84rem; border-bottom: 1px solid #dbe3ee;
+    }
+    .budget-table td {
+        color: #26364f; padding: .65rem .8rem; font-size: .84rem;
+        border-bottom: 1px solid #edf1f6;
+    }
+    .difference-up {color: #dc2626 !important; font-weight: 700;}
+    .difference-down {color: #15803d !important; font-weight: 700;}
+    @media (max-width: 1100px) {
+        .kpi-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}
+        .operation-card {min-height: auto;}
+    }
+    </style>
+    <div class="demo-note">Vista de prueba ficticia · Solo visible para Jefatura · No guarda datos</div>
+    """, unsafe_allow_html=True)
 
-    st.subheader("Resumen general del día")
+    st.markdown('<div class="dashboard-section-title">Resumen general del día</div>',
+                unsafe_allow_html=True)
     headline_values = [
         ("Jabas recibidas", "92,500"),
         ("Jabas a packing", "61,200"),
@@ -462,10 +528,15 @@ def render_management_budget_demo():
         ("Personal del día", "128"),
         ("Incidencias abiertas", "3"),
     ]
-    for column, (label, value) in zip(st.columns(5), headline_values):
-        column.metric(label, value)
+    headline_html = "".join(
+        f'<div class="kpi-card {"kpi-danger" if label == "Incidencias abiertas" else ""}">'
+        f'<div class="kpi-label">{label}</div><div class="kpi-value">{value}</div></div>'
+        for label, value in headline_values
+    )
+    st.markdown(f'<div class="kpi-grid">{headline_html}</div>', unsafe_allow_html=True)
 
-    st.subheader("Estado de las operaciones")
+    st.markdown('<div class="dashboard-section-title">Estado de las operaciones</div>',
+                unsafe_allow_html=True)
     operation_cards = [
         {
             "name": "Lavado de jabas", "status": "En riesgo", "color": "orange",
@@ -492,17 +563,19 @@ def render_management_budget_demo():
                         ("Stock", "31,300"), ("Personal", "19")],
         },
     ]
-    for column, card in zip(st.columns(5), operation_cards):
-        with column.container(border=True):
-            st.markdown(f"**{card['name']}**")
-            if card["color"] == "green":
-                st.success(card["status"])
-            elif card["color"] == "orange":
-                st.warning(card["status"])
-            else:
-                st.info(card["status"])
-            for label, value in card["metrics"]:
-                st.metric(label, value)
+    report_columns = st.columns(5)
+    for column, card in zip(report_columns, operation_cards):
+        rows_html = "".join(
+            f'<div class="metric-row"><span>{label}</span><strong>{value}</strong></div>'
+            for label, value in card["metrics"]
+        )
+        with column:
+            st.markdown(
+                f'<div class="operation-card"><div class="operation-title">{card["name"]}</div>'
+                f'<span class="status-pill status-{card["color"]}">{card["status"]}</span>'
+                f'{rows_html}</div>',
+                unsafe_allow_html=True,
+            )
             if st.button(
                 "Ver reporte", key=f"demo_report_{card['name']}", use_container_width=True
             ):
@@ -510,15 +583,28 @@ def render_management_budget_demo():
                 st.session_state["current_section_JEFATURA"] = "Reportes"
                 st.rerun()
 
-    st.subheader("Resumen presupuesto vs. real · Solo Jefatura")
-    comparison = pd.DataFrame([
-        ["Lavado de jabas", "US$1,111.74", "US$1,164.68", "+US$52.94", "Desviación"],
-        ["Distribución de jabas", "US$832.50", "US$815.20", "-US$17.30", "Dentro del plan"],
-        ["Luminarias", "US$642.80", "US$636.10", "-US$6.70", "Dentro del plan"],
-        ["Acarreo de fruta", "US$1,255.60", "US$1,228.45", "-US$27.15", "Dentro del plan"],
-        ["Acopios", "US$903.40", "US$915.85", "+US$12.45", "Desviación"],
-    ], columns=["Proceso", "Plan", "Real", "Diferencia", "Estado"])
-    st.dataframe(comparison, width="stretch", hide_index=True)
+    st.markdown(
+        '<div class="dashboard-section-title">Resumen presupuesto vs. real · Solo Jefatura</div>',
+        unsafe_allow_html=True,
+    )
+    comparison = [
+        ("Lavado de jabas", "US$1,111.74", "US$1,164.68", "+US$52.94", "Desviación", "up"),
+        ("Distribución de jabas", "US$832.50", "US$815.20", "-US$17.30", "Dentro del plan", "down"),
+        ("Luminarias", "US$642.80", "US$636.10", "-US$6.70", "Dentro del plan", "down"),
+        ("Acarreo de fruta", "US$1,255.60", "US$1,228.45", "-US$27.15", "Dentro del plan", "down"),
+        ("Acopios", "US$903.40", "US$915.85", "+US$12.45", "Desviación", "up"),
+    ]
+    table_rows = "".join(
+        f'<tr><td>{process}</td><td>{plan}</td><td>{actual}</td>'
+        f'<td class="difference-{direction}">{difference}</td><td>{status}</td></tr>'
+        for process, plan, actual, difference, status, direction in comparison
+    )
+    st.markdown(
+        '<div class="budget-table-wrap"><table class="budget-table">'
+        '<thead><tr><th>Proceso</th><th>Plan</th><th>Real</th><th>Diferencia</th>'
+        f'<th>Estado</th></tr></thead><tbody>{table_rows}</tbody></table></div>',
+        unsafe_allow_html=True,
+    )
     st.caption(
         "Montos expresados en dólares estadounidenses (USD). En Lavado se aplican 40% "
         "de jabas blancas, 10% de rojas y US$26.47 por persona/jornada."
