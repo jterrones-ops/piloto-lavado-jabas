@@ -1316,7 +1316,7 @@ def render_planning_view():
         st.title("Planificación diaria")
         st.caption(
             "Carga la maestra del día. Aquí se revisan jabas, variedades, lotes, "
-            "turnos y centros de acopio; no se muestra necesidad de personal."
+            "turnos, centros de acopio y personal requerido por subproceso."
         )
         uploaded_plan = st.file_uploader(
             "Maestra diaria", type=["xlsx", "xls"],
@@ -1335,6 +1335,37 @@ def render_planning_view():
                 c3.metric("Lotes", len(saved_plan.get("lotes", {})))
                 c4.metric("Centros de acopio", len(saved_plan.get("acopios", {})))
                 st.caption(f"Archivo: {saved_plan.get('archivo', 'Maestra diaria')}")
+                processes = saved_plan.get("procesos", {})
+                personnel_rows = []
+                for process_name, process_data in processes.items():
+                    labors = process_data.get("labores", {})
+                    for labor_name, quantity in labors.items():
+                        personnel_rows.append({
+                            "Proceso": process_name,
+                            "Subproceso": labor_name,
+                            "Personal requerido": int(quantity or 0),
+                        })
+                if personnel_rows:
+                    st.subheader("Personal requerido por subproceso")
+                    st.dataframe(pd.DataFrame(personnel_rows), width="stretch", hide_index=True)
+                variety_tab, lot_tab, acopio_tab = st.tabs([
+                    "Por variedad", "Por lote", "Por acopio"
+                ])
+                with variety_tab:
+                    st.dataframe(pd.DataFrame([
+                        {"Variedad": key, "Jabas": value}
+                        for key, value in saved_plan.get("variedades", {}).items()
+                    ]), width="stretch", hide_index=True)
+                with lot_tab:
+                    st.dataframe(pd.DataFrame([
+                        {"Lote": key, "Jabas": value}
+                        for key, value in saved_plan.get("lotes", {}).items()
+                    ]), width="stretch", hide_index=True)
+                with acopio_tab:
+                    st.dataframe(pd.DataFrame([
+                        {"Acopio": key, "Jabas": value}
+                        for key, value in saved_plan.get("acopios", {}).items()
+                    ]), width="stretch", hide_index=True)
             else:
                 st.info("Carga la maestra diaria para visualizar y guardar la planificación.")
             return
