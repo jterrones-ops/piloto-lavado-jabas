@@ -1,5 +1,5 @@
 name: Cargar planificación integral de mañana
-# Reejecución solicitada para confirmar la carga del 21/07/2026.
+# Reejecución para cargar personal de Lavado por turno y subproceso.
 
 on:
   push:
