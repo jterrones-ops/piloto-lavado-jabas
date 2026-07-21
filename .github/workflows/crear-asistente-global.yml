@@ -1,0 +1,27 @@
+name: Habilitar asistente global de pruebas
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/crear-asistente-global.yml"
+  workflow_dispatch:
+
+jobs:
+  habilitar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+      - name: Crear o restablecer asistente global
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python tools/create_global_assistant.py
