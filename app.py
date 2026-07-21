@@ -1457,7 +1457,49 @@ def render_planning_view():
         return
     else:
         st.title(f"Planificación · {selected_operation}")
-        st.caption("Vista de la programación de turnos y recursos.")
+        plan_date = st.date_input(
+            "Fecha de planificación",
+            datetime.now(LIMA).date() + timedelta(days=1),
+            key=f"operation_plan_date_{role}_{selected_operation}",
+        )
+        operation_plan = load_daily_plan(str(plan_date))
+        process_plan = operation_plan.get("procesos", {}).get(selected_operation, {})
+        st.caption("Vista operativa de lo programado para la jornada seleccionada.")
+        if int(operation_plan.get("total_jabas", 0) or 0) <= 0:
+            st.info(f"No hay planificación cargada para {plan_date.strftime('%d/%m/%Y')}.")
+        elif selected_operation == "Lavado de jabas":
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Jabas a lavar", f"{int(operation_plan.get('jabas_lavado', 0) or 0):,}")
+            c2.metric("Jabas blancas", f"{int(operation_plan.get('jabas_blancas', 0) or 0):,}")
+            c3.metric("Jabas rojas", f"{int(operation_plan.get('jabas_rojas', 0) or 0):,}")
+        elif selected_operation == "Distribución de jabas":
+            st.metric("Jabas programadas", f"{int(process_plan.get('meta', 0) or 0):,}")
+        elif selected_operation == "Luminarias":
+            st.metric("Luminarias programadas", f"{int(process_plan.get('meta', 0) or 0):,}")
+        elif selected_operation == "Acarreo de fruta":
+            st.metric("Viajes programados", f"{int(process_plan.get('meta', 0) or 0):,}")
+        elif selected_operation == "Acopios":
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Jabas por recibir", f"{int(operation_plan.get('jabas_recibidas', 0) or 0):,}")
+            c2.metric("Jabas previstas a packing", f"{int(operation_plan.get('jabas_packing', 0) or 0):,}")
+            c3.metric("Puntos de acopio", len(operation_plan.get("acopios", {})))
+            acopio_plan = pd.DataFrame([
+                {"Acopio": location, "Jabas programadas": amount}
+                for location, amount in operation_plan.get("acopios", {}).items()
+            ])
+            if not acopio_plan.empty:
+                st.dataframe(acopio_plan, width="stretch", hide_index=True)
+
+        if role == "SUPERVISOR" and process_plan.get("labores"):
+            st.subheader("Personal programado por subproceso")
+            st.dataframe(pd.DataFrame([
+                {"Subproceso": labor, "Personal": quantity}
+                for labor, quantity in process_plan.get("labores", {}).items()
+            ]), width="stretch", hide_index=True)
+        elif role == "ASISTENTE" and process_plan:
+            st.caption("Se muestra la meta operativa; costos y presupuesto permanecen reservados para Jefatura.")
+
+        st.subheader("Horarios de turno")
         schedules = pd.DataFrame([
             {"Turno": item["label"], "Inicio": item["start"], "Fin": item["end"]}
             for item in SHIFT_SCHEDULES[selected_operation]
