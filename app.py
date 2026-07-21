@@ -1490,7 +1490,23 @@ def render_planning_view():
             if not acopio_plan.empty:
                 st.dataframe(acopio_plan, width="stretch", hide_index=True)
 
-        if role == "SUPERVISOR" and process_plan.get("labores"):
+        shift_plan = process_plan.get("turnos", [])
+        if shift_plan:
+            st.subheader("Personal requerido por turno y subproceso")
+            shift_rows = []
+            for shift_data in shift_plan:
+                labors = shift_data.get("labores", {})
+                row = {
+                    "Turno": shift_data.get("turno", ""),
+                    "Horario": f"{shift_data.get('inicio', '')} – {shift_data.get('fin', '')}",
+                    "Meta": int(shift_data.get("meta", 0) or 0),
+                }
+                row.update({labor: int(quantity or 0) for labor, quantity in labors.items()})
+                row["Personal total"] = sum(int(quantity or 0) for quantity in labors.values())
+                shift_rows.append(row)
+            st.dataframe(pd.DataFrame(shift_rows), width="stretch", hide_index=True)
+
+        if role == "SUPERVISOR" and process_plan.get("labores") and not shift_plan:
             st.subheader("Personal programado por subproceso")
             st.dataframe(pd.DataFrame([
                 {"Subproceso": labor, "Personal": quantity}
