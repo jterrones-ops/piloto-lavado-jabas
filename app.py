@@ -217,10 +217,13 @@ def edit(table, data, filters):
 def acopio_trips(turn_id):
     prefix = f"viaje_acopio:{turn_id}:"
     trips = []
-    for row in get(T["config"], order=None):
+    try:
+        rows = sb.table(T["config"]).select("clave,valor").like("clave", f"{prefix}%").execute().data or []
+    except Exception:
+        st.error("No se pudieron consultar los viajes del acopio.")
+        st.stop()
+    for row in rows:
         key = str(row.get("clave", ""))
-        if not key.startswith(prefix):
-            continue
         try:
             trip = json.loads(row.get("valor") or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -246,6 +249,52 @@ def acopio_entries(turn_id):
         entry["_key"] = row.get("clave")
         entries.append(entry)
     return sorted(entries, key=lambda item: item.get("hora", ""), reverse=True)
+
+
+def acopio_movement_report(turn_ids):
+    """Consolida recepciones y salidas de acopio por lote y variedad."""
+    movement_rows = []
+    for turn_id in {str(value) for value in turn_ids}:
+        for entry in acopio_entries(turn_id):
+            for detail in entry.get("variedades", []):
+                movement_rows.append({
+                    "Fecha y hora": entry.get("hora"),
+                    "Acopio": entry.get("acopio", ""),
+                    "Movimiento": "Llegada a acopio",
+                    "Lote": detail.get("lote") or entry.get("procedencia") or "Sin lote",
+                    "Variedad": detail.get("variedad") or "Sin variedad",
+                    "Jabas": int(detail.get("jabas", 0) or 0),
+                    "Responsable": entry.get("responsable_entrega", ""),
+                    "Unidad": entry.get("unidad", ""),
+                })
+        for trip in acopio_trips(turn_id):
+            for detail in trip.get("variedades", []):
+                movement_rows.append({
+                    "Fecha y hora": trip.get("salida"),
+                    "Acopio": trip.get("acopio", ""),
+                    "Movimiento": "Envío a packing",
+                    "Lote": detail.get("lote") or "Sin lote",
+                    "Variedad": detail.get("variedad") or "Sin variedad",
+                    "Jabas": int(detail.get("jabas", 0) or 0),
+                    "Responsable": trip.get("responsable_envio", ""),
+                    "Unidad": trip.get("unidad", ""),
+                })
+    if not movement_rows:
+        return pd.DataFrame(), pd.DataFrame()
+    detail = pd.DataFrame(movement_rows)
+    detail["Llegadas"] = detail["Jabas"].where(
+        detail["Movimiento"] == "Llegada a acopio", 0
+    )
+    detail["Enviadas a packing"] = detail["Jabas"].where(
+        detail["Movimiento"] == "Envío a packing", 0
+    )
+    summary = (
+        detail.groupby(["Acopio", "Lote", "Variedad"], as_index=False)[
+            ["Llegadas", "Enviadas a packing"]
+        ].sum()
+    )
+    summary["Saldo"] = summary["Llegadas"] - summary["Enviadas a packing"]
+    return detail, summary
 
 
 def save_acopio_entry(turn_id, entry):
@@ -1408,6 +1457,7 @@ def render_reports_view():
             ]
     else:
         st.title(f"Reportes · {selected_operation}")
+        report_operation = selected_operation
         if role == "ASISTENTE":
             turns = filter_current_operation(frame(T["turnos"], {"asistente_id": user_id}))
         else:
@@ -1447,6 +1497,35 @@ def render_reports_view():
             st.dataframe(view, width="stretch", hide_index=True)
     else:
         render_daily_turn_table(daily_turns, f"reports_daily_{role}_{selected_operation}")
+
+    if report_operation == "Acopios":
+        movement_detail, movement_summary = acopio_movement_report(turn_ids)
+        st.subheader("Movimiento de jabas en acopios")
+        if movement_detail.empty:
+            st.info("Todavía no hay llegadas ni envíos a packing registrados hoy.")
+        else:
+            arrivals = int(movement_detail["Llegadas"].sum())
+            packing = int(movement_detail["Enviadas a packing"].sum())
+            trips = int(
+                movement_detail.loc[
+                    movement_detail["Movimiento"] == "Envío a packing", "Fecha y hora"
+                ].nunique()
+            )
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Jabas llegadas", f"{arrivals:,}")
+            c2.metric("Jabas enviadas a packing", f"{packing:,}")
+            c3.metric("Saldo", f"{arrivals - packing:,}")
+            c4.metric("Viajes a packing", trips)
+            st.dataframe(movement_summary, width="stretch", hide_index=True)
+            with st.expander("Ver movimientos registrados"):
+                movement_view = movement_detail[
+                    ["Fecha y hora", "Acopio", "Movimiento", "Lote", "Variedad",
+                     "Jabas", "Responsable", "Unidad"]
+                ].copy()
+                movement_view["Fecha y hora"] = pd.to_datetime(
+                    movement_view["Fecha y hora"], errors="coerce"
+                ).dt.strftime("%d/%m/%Y %H:%M")
+                st.dataframe(movement_view, width="stretch", hide_index=True)
 
     if not incidents.empty:
         with st.expander("Ver incidencias del día"):
@@ -1729,20 +1808,28 @@ elif role == "ASISTENTE" and page == "Operación":
                 c3.metric("Saldo en acopio", f"{max(received_jabas - sent_jabas, 0):,}")
                 c4.metric("Viajes en tránsito", len(in_transit))
 
+                movement_detail, movement_summary = acopio_movement_report({turn_id})
+                st.markdown("#### Reporte acumulado del turno")
+                if movement_summary.empty:
+                    st.info("Aún no hay movimientos registrados.")
+                else:
+                    st.dataframe(movement_summary, width="stretch", hide_index=True)
+
                 st.markdown("#### Registrar recepción en acopio")
                 with st.form("register_acopio_entry", clear_on_submit=True):
                     c1, c2, c3 = st.columns(3)
-                    origin = c1.text_input("Procedencia o lote")
+                    origin = c1.text_input("Procedencia", placeholder="Campo, sector o punto de origen")
                     delivered_by = c2.text_input("Responsable de entrega")
                     entry_time = c3.time_input(
                         "Hora de recepción", datetime.now(LIMA).time().replace(second=0, microsecond=0)
                     )
                     entry_editor = st.data_editor(
-                        pd.DataFrame([{"Variedad": "", "Jabas": 0}]),
+                        pd.DataFrame([{"Lote": "", "Variedad": "", "Jabas": 0}]),
                         num_rows="dynamic",
                         hide_index=True,
                         use_container_width=True,
                         column_config={
+                            "Lote": st.column_config.TextColumn("Lote", required=True),
                             "Variedad": st.column_config.TextColumn("Variedad", required=True),
                             "Jabas": st.column_config.NumberColumn(
                                 "Jabas", min_value=0, step=1, required=True
@@ -1755,17 +1842,18 @@ elif role == "ASISTENTE" and page == "Operación":
                     ):
                         details = []
                         for _, detail in entry_editor.iterrows():
+                            lot = str(detail.get("Lote") or "").strip()
                             variety = str(detail.get("Variedad") or "").strip()
                             amount = detail.get("Jabas", 0)
                             amount = 0 if pd.isna(amount) else int(amount)
-                            if variety and amount > 0:
-                                details.append({"variedad": variety, "jabas": amount})
+                            if lot and variety and amount > 0:
+                                details.append({"lote": lot, "variedad": variety, "jabas": amount})
                         if not origin.strip():
-                            st.error("Indica la procedencia o lote.")
+                            st.error("Indica la procedencia.")
                         elif not delivered_by.strip():
                             st.error("Indica el responsable de entrega.")
                         elif not details:
-                            st.error("Agrega al menos una variedad con cantidad de jabas.")
+                            st.error("Agrega al menos un lote y variedad con cantidad de jabas.")
                         else:
                             turn = frame(T["turnos"], {"id": turn_id}).iloc[0]
                             entry_day = date.fromisoformat(str(turn["fecha"]))
@@ -1792,6 +1880,7 @@ elif role == "ASISTENTE" and page == "Operación":
                         entry_rows = []
                         for item in entries:
                             varieties = ", ".join(
+                                f"{detail.get('lote') or item.get('procedencia') or 'Sin lote'} · "
                                 f"{detail['variedad']}: {detail['jabas']}"
                                 for detail in item.get("variedades", [])
                             )
@@ -1807,18 +1896,20 @@ elif role == "ASISTENTE" and page == "Operación":
 
                 st.markdown("#### Registrar salida")
                 with st.form("register_acopio_trip", clear_on_submit=True):
-                    c1, c2 = st.columns(2)
+                    c1, c2, c3 = st.columns(3)
                     unit = c1.text_input("Unidad", placeholder="Código o placa")
-                    departure_time = c2.time_input(
+                    shipping_responsible = c2.text_input("Responsable del envío")
+                    departure_time = c3.time_input(
                         "Hora de salida", datetime.now(LIMA).time().replace(second=0, microsecond=0)
                     )
-                    st.caption("Agrega una fila por cada variedad transportada.")
+                    st.caption("Destino: Packing. Agrega una fila por cada lote y variedad transportada.")
                     varieties_editor = st.data_editor(
-                        pd.DataFrame([{"Variedad": "", "Jabas": 0}]),
+                        pd.DataFrame([{"Lote": "", "Variedad": "", "Jabas": 0}]),
                         num_rows="dynamic",
                         hide_index=True,
                         use_container_width=True,
                         column_config={
+                            "Lote": st.column_config.TextColumn("Lote", required=True),
                             "Variedad": st.column_config.TextColumn("Variedad", required=True),
                             "Jabas": st.column_config.NumberColumn("Jabas", min_value=0, step=1, required=True),
                         },
@@ -1830,21 +1921,24 @@ elif role == "ASISTENTE" and page == "Operación":
                     if register_trip:
                         details = []
                         for _, detail in varieties_editor.iterrows():
+                            lot = str(detail.get("Lote") or "").strip()
                             variety = str(detail.get("Variedad") or "").strip()
                             amount = detail.get("Jabas", 0)
                             amount = 0 if pd.isna(amount) else int(amount)
-                            if variety and amount > 0:
-                                details.append({"variedad": variety, "jabas": amount})
+                            if lot and variety and amount > 0:
+                                details.append({"lote": lot, "variedad": variety, "jabas": amount})
                         normalized_unit = unit.strip().upper()
                         duplicate_unit = any(
                             str(item.get("unidad", "")).upper() == normalized_unit for item in in_transit
                         )
                         if not normalized_unit:
                             st.error("Ingresa la unidad que realiza el viaje.")
+                        elif not shipping_responsible.strip():
+                            st.error("Ingresa el responsable del envío.")
                         elif duplicate_unit:
                             st.error("Esa unidad ya tiene un viaje en tránsito.")
                         elif not details:
-                            st.error("Agrega al menos una variedad con cantidad de jabas.")
+                            st.error("Agrega al menos un lote y variedad con cantidad de jabas.")
                         else:
                             turn = frame(T["turnos"], {"id": turn_id}).iloc[0]
                             turn_day = date.fromisoformat(str(turn["fecha"]))
@@ -1858,6 +1952,8 @@ elif role == "ASISTENTE" and page == "Operación":
                                 "numero": next_number, "acopio": location,
                                 "tipo_acopio": acopio_data["tipo"], "capacidad": acopio_data["capacidad"],
                                 "unidad": normalized_unit,
+                                "destino": "Packing",
+                                "responsable_envio": shipping_responsible.strip(),
                                 "salida": departure.isoformat(timespec="seconds"),
                                 "llegada": None, "duracion_minutos": None,
                                 "variedades": details,
@@ -1899,10 +1995,12 @@ elif role == "ASISTENTE" and page == "Operación":
                     rows = []
                     for item in trips:
                         varieties = ", ".join(
-                            f"{detail['variedad']}: {detail['jabas']}" for detail in item.get("variedades", [])
+                            f"{detail.get('lote') or 'Sin lote'} · {detail['variedad']}: {detail['jabas']}"
+                            for detail in item.get("variedades", [])
                         )
                         rows.append({
                             "Viaje": item.get("numero"), "Unidad": item.get("unidad"),
+                            "Responsable": item.get("responsable_envio", ""),
                             "Salida": display_clock(item.get("salida")),
                             "Llegada": display_clock(item.get("llegada")),
                             "Duración (min)": item.get("duracion_minutos") or "Pendiente",
