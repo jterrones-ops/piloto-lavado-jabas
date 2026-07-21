@@ -1,8 +1,10 @@
 from datetime import date, datetime, time, timedelta
+from io import BytesIO
 from zoneinfo import ZoneInfo
 import hashlib
 import hmac
 import json
+import unicodedata
 from time import sleep
 from urllib.parse import quote
 from uuid import uuid4
@@ -331,6 +333,67 @@ def save_daily_plan(plan_date, plan):
         "descripcion": "Planificación diaria consolidada de Jefatura",
         "actualizado_en": now(),
     }, on_conflict="clave").execute()
+
+
+def normalized_header(value):
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(character for character in text if not unicodedata.combining(character))
+    return " ".join(text.strip().lower().replace(".", "").split())
+
+
+def read_daily_master(file_bytes):
+    workbook = pd.ExcelFile(BytesIO(file_bytes))
+    preferred = ["Data Master", "BD PPTO", "Base Datos"]
+    sheet_names = [name for name in preferred if name in workbook.sheet_names]
+    sheet_names.extend(name for name in workbook.sheet_names if name not in sheet_names)
+    aliases = {
+        "semana": "Semana", "semanas": "Semana",
+        "dia de cosecha": "Fecha",
+        "lote": "Lote", "variedad": "Variedad",
+        "turno de cosecha": "Turno",
+        "ubicacion ctro acopio": "Centro de acopio",
+        "cod centro de acopio": "Código de acopio",
+        "jabas diarias": "Jabas del día",
+    }
+    for sheet_name in sheet_names:
+        raw = pd.read_excel(workbook, sheet_name=sheet_name, header=None)
+        for header_index in range(min(len(raw), 12)):
+            headers = [normalized_header(value) for value in raw.iloc[header_index].tolist()]
+            if "lote" not in headers or "variedad" not in headers or "jabas diarias" not in headers:
+                continue
+            columns = []
+            used = set()
+            for position, header in enumerate(headers):
+                name = aliases.get(header, f"columna_{position}")
+                if name in used:
+                    name = f"{name}_{position}"
+                used.add(name)
+                columns.append(name)
+            data = raw.iloc[header_index + 1:].copy()
+            data.columns = columns
+            required = ["Fecha", "Lote", "Variedad", "Jabas del día"]
+            if any(column not in data for column in required):
+                continue
+            numeric_dates = pd.to_numeric(data["Fecha"], errors="coerce")
+            excel_dates = pd.to_datetime(
+                numeric_dates, unit="D", origin="1899-12-30", errors="coerce"
+            )
+            text_dates = pd.to_datetime(data["Fecha"], errors="coerce", dayfirst=True)
+            data["Fecha"] = excel_dates.where(numeric_dates.notna(), text_dates)
+            data["Jabas del día"] = pd.to_numeric(data["Jabas del día"], errors="coerce")
+            data = data.dropna(subset=["Fecha", "Lote", "Variedad", "Jabas del día"])
+            data = data[data["Jabas del día"] > 0]
+            data["Fecha"] = data["Fecha"].dt.date
+            visible_columns = [
+                column for column in [
+                    "Semana", "Fecha", "Lote", "Variedad", "Turno",
+                    "Centro de acopio", "Código de acopio", "Jabas del día",
+                ] if column in data
+            ]
+            return data[visible_columns].reset_index(drop=True), sheet_name
+    raise ValueError(
+        "No se encontraron las columnas Fecha, Lote, Variedad y Jabas Diarias en el archivo."
+    )
 
 
 def acopio_trip_totals(turn_ids):
@@ -1201,76 +1264,117 @@ def render_module_cards(current_role):
 
 def render_planning_view():
     if role == "JEFATURA":
-        st.title("Planificación general")
-        st.caption("Define las metas del día que utilizará el Dashboard consolidado.")
-        plan_date = st.date_input("Fecha de planificación", datetime.now(LIMA).date())
-        plan_date_text = str(plan_date)
-        current_plan = load_daily_plan(plan_date_text)
-
-        st.subheader("Metas de movimiento de jabas")
-        c1, c2 = st.columns(2)
-        planned_received = c1.number_input(
-            "Jabas planificadas para recibir en acopios",
-            min_value=0,
-            max_value=10000000,
-            value=int(current_plan.get("jabas_recibidas", 0) or 0),
-            step=100,
+        st.title("Planificación diaria")
+        st.caption(
+            "Carga la maestra del día. Aquí se revisan jabas, variedades, lotes, "
+            "turnos y centros de acopio; no se muestra necesidad de personal."
         )
-        planned_packing = c2.number_input(
-            "Jabas planificadas para enviar a packing",
-            min_value=0,
-            max_value=10000000,
-            value=int(current_plan.get("jabas_packing", 0) or 0),
-            step=100,
+        uploaded_plan = st.file_uploader(
+            "Maestra diaria", type=["xlsx", "xls"],
+            help="El archivo debe contener Fecha, Lote, Variedad y Jabas Diarias.",
+        )
+        if uploaded_plan is None:
+            consult_date = st.date_input(
+                "Consultar planificación guardada", datetime.now(LIMA).date()
+            )
+            saved_plan = load_daily_plan(str(consult_date))
+            saved_total = int(saved_plan.get("total_jabas", 0) or 0)
+            if saved_total:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Jabas del día", f"{saved_total:,}")
+                c2.metric("Variedades", len(saved_plan.get("variedades", {})))
+                c3.metric("Lotes", len(saved_plan.get("lotes", {})))
+                c4.metric("Centros de acopio", len(saved_plan.get("acopios", {})))
+                st.caption(f"Archivo: {saved_plan.get('archivo', 'Maestra diaria')}")
+            else:
+                st.info("Carga la maestra diaria para visualizar y guardar la planificación.")
+            return
+
+        try:
+            master, source_sheet = read_daily_master(uploaded_plan.getvalue())
+        except Exception as error:
+            st.error(f"No se pudo leer la maestra diaria: {error}")
+            return
+
+        available_dates = sorted(master["Fecha"].dropna().unique())
+        selected_date = st.selectbox(
+            "Fecha de planificación", available_dates,
+            format_func=lambda value: value.strftime("%d/%m/%Y"),
+        )
+        day_data = master[master["Fecha"] == selected_date].copy()
+        total_jabas = int(round(day_data["Jabas del día"].sum()))
+        variety_summary = (
+            day_data.groupby("Variedad", as_index=False)["Jabas del día"].sum()
+            .sort_values("Jabas del día", ascending=False)
+        )
+        lot_summary = (
+            day_data.groupby("Lote", as_index=False)["Jabas del día"].sum()
+            .sort_values("Jabas del día", ascending=False)
+        )
+        if "Centro de acopio" in day_data:
+            acopio_summary = (
+                day_data.groupby("Centro de acopio", as_index=False)["Jabas del día"].sum()
+                .sort_values("Jabas del día", ascending=False)
+            )
+        else:
+            acopio_summary = pd.DataFrame(columns=["Centro de acopio", "Jabas del día"])
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Jabas del día", f"{total_jabas:,}")
+        c2.metric("Variedades", day_data["Variedad"].nunique())
+        c3.metric("Lotes", day_data["Lote"].nunique())
+        c4.metric(
+            "Centros de acopio",
+            day_data["Centro de acopio"].nunique() if "Centro de acopio" in day_data else 0,
         )
 
-        st.subheader("Personal planificado por proceso")
-        plan_rows = []
-        for operation in [item["name"] for item in OPERACIONES]:
-            process_plan = current_plan.get("procesos", {}).get(operation, {})
-            plan_rows.append({
-                "Proceso": operation,
-                "Personal planificado": int(process_plan.get("personal", 0) or 0),
-            })
-        people_editor = st.data_editor(
-            pd.DataFrame(plan_rows),
-            hide_index=True,
-            use_container_width=True,
-            disabled=["Proceso"],
-            column_config={
-                "Proceso": st.column_config.TextColumn("Proceso"),
-                "Personal planificado": st.column_config.NumberColumn(
-                    "Personal planificado", min_value=0, step=1, required=True
-                ),
-            },
-            key=f"daily_plan_people_{plan_date_text}",
-        )
-        if st.button("Guardar planificación del día", type="primary", use_container_width=True):
-            processes = {}
-            for _, plan_row in people_editor.iterrows():
-                quantity = plan_row.get("Personal planificado", 0)
-                quantity = 0 if pd.isna(quantity) else int(quantity)
-                processes[str(plan_row["Proceso"])] = {"personal": quantity}
-            save_daily_plan(plan_date_text, {
-                "jabas_recibidas": int(planned_received),
-                "jabas_packing": int(planned_packing),
-                "procesos": processes,
-            })
-            st.success("Planificación guardada. El Dashboard ya usará estas metas.")
-
-        st.divider()
-        st.subheader("Horarios programados")
-        schedules = pd.DataFrame([
-            {
-                "Operación": operation,
-                "Turno": item["label"],
-                "Inicio": item["start"],
-                "Fin": item["end"],
-            }
-            for operation, items in SHIFT_SCHEDULES.items()
-            for item in items
+        detail_tab, variety_tab, lot_tab, acopio_tab = st.tabs([
+            "Detalle diario", "Por variedad", "Por lote", "Por acopio"
         ])
-        planned = today_turns(frame(T["turnos"]))
+        with detail_tab:
+            st.dataframe(day_data, width="stretch", hide_index=True)
+        with variety_tab:
+            st.dataframe(variety_summary, width="stretch", hide_index=True)
+        with lot_tab:
+            st.dataframe(lot_summary, width="stretch", hide_index=True)
+        with acopio_tab:
+            if acopio_summary.empty:
+                st.info("El archivo no contiene centro de acopio.")
+            else:
+                st.dataframe(acopio_summary, width="stretch", hide_index=True)
+
+        st.caption(f"Hoja detectada: {source_sheet} · Registros del día: {len(day_data)}")
+        if st.button("Guardar planificación diaria", type="primary", use_container_width=True):
+            varieties = {
+                str(row["Variedad"]): int(round(row["Jabas del día"]))
+                for _, row in variety_summary.iterrows()
+            }
+            lots = {
+                str(row["Lote"]): int(round(row["Jabas del día"]))
+                for _, row in lot_summary.iterrows()
+            }
+            acopios = {
+                str(row["Centro de acopio"]): int(round(row["Jabas del día"]))
+                for _, row in acopio_summary.iterrows()
+            }
+            detail = json.loads(
+                day_data.to_json(orient="records", date_format="iso", force_ascii=False)
+            )
+            save_daily_plan(str(selected_date), {
+                "archivo": uploaded_plan.name,
+                "hoja": source_sheet,
+                "total_jabas": total_jabas,
+                "jabas_blancas": int(total_jabas * 0.40 + 0.5),
+                "jabas_rojas": int(total_jabas * 0.10 + 0.5),
+                "jabas_lavado": int(total_jabas * 0.50 + 0.5),
+                "variedades": varieties,
+                "lotes": lots,
+                "acopios": acopios,
+                "detalle": detail,
+                "procesos": {},
+            })
+            st.success("Planificación diaria guardada correctamente.")
+        return
     else:
         st.title(f"Planificación · {selected_operation}")
         st.caption("Vista de la programación de turnos y recursos.")
