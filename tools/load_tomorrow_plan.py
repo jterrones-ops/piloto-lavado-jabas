@@ -43,6 +43,16 @@ def main():
                 "meta": 22500,
                 "unidad": "jabas",
                 "labores": {"Lavado": 15, "Secado": 6},
+                "turnos": [
+                    {
+                        "turno": "Mañana", "inicio": "06:00", "fin": "18:00",
+                        "meta": 12000, "labores": {"Lavado": 8, "Secado": 3},
+                    },
+                    {
+                        "turno": "Tarde", "inicio": "18:00", "fin": "06:00",
+                        "meta": 10500, "labores": {"Lavado": 7, "Secado": 3},
+                    },
+                ],
             },
             "Distribución de jabas": {
                 "personal": 18,
